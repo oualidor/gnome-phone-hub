@@ -1,0 +1,16 @@
+{
+    "name": "Phone HUB",
+    "description": "Monitor Android battery and use your phone as a 1080p Webcam. Requires 'adb', 'scrcpy' (in /opt/scrcpy/), and 'v4l2loopback'. USB Debugging must be enabled on the phone.",
+    "uuid": "phone-hub@oualidkhial",
+    "shell-version": [
+        "45",
+        "46",
+        "47",
+        "48",
+        "49",
+        "50"
+    ],
+    "url": "https://github.com/oualidkhial/phone-hub",
+    "gettext-domain": "phone-hub",
+    "version": 1
+}
