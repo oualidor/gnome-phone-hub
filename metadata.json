@@ -1,6 +1,6 @@
 {
     "name": "Phone HUB",
-    "description": "Monitor Android battery and use your phone as a 1080p Webcam. Requires 'adb', 'scrcpy' (in /opt/scrcpy/), and 'v4l2loopback'. USB Debugging must be enabled on the phone.",
+    "description": "ADB and Scrcpy based Phone HUB lets lets you connect your adnroid phone to your GNOME desktop, for now you can monitor your phone's battery life,  use your phone as a webcam or mirror its screen.",
     "uuid": "phone-hub@oualidkhial",
     "shell-version": [
         "45",
@@ -10,7 +10,7 @@
         "49",
         "50"
     ],
-    "url": "https://github.com/oualidkhial/phone-hub",
+    "url": "https://github.com/oualidor/gnome-phone-hub",
     "gettext-domain": "phone-hub",
     "version": 1
 }
