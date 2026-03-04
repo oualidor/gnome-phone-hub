@@ -267,6 +267,20 @@ export const PhoneHubToggle = GObject.registerClass({
                 offlineItem.insert_child_at_index(new St.Icon({ icon_name: 'network-offline-symbolic', style_class: 'popup-menu-icon' }), 0);
                 offlineItem.sensitive = false;
                 deviceSubMenu.menu.addMenuItem(offlineItem);
+
+                deviceSubMenu.add_child(new St.Widget({ x_expand: true }));
+                let forgetOfflineBtn = new St.Button({
+                    child: new St.Icon({ icon_name: 'user-trash-symbolic', style_class: 'user-trash-symbolic' }),
+                    can_focus: true,
+                    style_class: 'button',
+                    x_align: Clutter.ActorAlign.END,
+                });
+                forgetOfflineBtn.connect('clicked', () => {
+                    this._forgetDevice();
+                    return Clutter.EVENT_STOP;
+                });
+                deviceSubMenu.add_child(forgetOfflineBtn);
+
                 this._deviceSection.addMenuItem(deviceSubMenu);
             }
             // Always show Pair New Device
@@ -383,38 +397,21 @@ export const PhoneHubToggle = GObject.registerClass({
         let deviceSubMenu = new PopupMenu.PopupSubMenuMenuItem(label, true);
         deviceSubMenu.iconName = 'phone-symbolic';
 
-        if (isPaired) {
-            deviceSubMenu.add_child(new St.Widget({ x_expand: true }));
-            let unpairBtn = new St.Button({
-                child: new St.Icon({
-                    icon_name: 'edit-clear-symbolic',
-                    style_class: 'popup-menu-icon',
-                }),
-                can_focus: true,
-                style_class: 'button',
-                x_align: Clutter.ActorAlign.END,
-            });
-            unpairBtn.connect('clicked', () => {
-                const settings = Settings.loadSettings();
-                const ip = settings.phoneIp;
-
-                if (ip) {
-                    try {
-                        const message = Soup.Message.new('POST', `http://${ip}:8080/unpair`);
-                        // Send and forget for unpairing
-                        SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, () => { });
-                    } catch (e) {
-                        console.error(`Failed to notify phone of unpair: ${e.message}`);
-                    }
-                }
-
-                Settings.saveSettings({ phoneIp: "" });
-                this.refreshDevices(true);
-                Main.notify("Phone HUB", "Device unpaired successfully.");
-                return Clutter.EVENT_STOP;
-            });
-            deviceSubMenu.add_child(unpairBtn);
-        }
+        deviceSubMenu.add_child(new St.Widget({ x_expand: true }));
+        let unpairBtn = new St.Button({
+            child: new St.Icon({
+                icon_name: 'user-trash-symbolic',
+                style_class: 'popup-menu-icon',
+            }),
+            can_focus: true,
+            style_class: 'button',
+            x_align: Clutter.ActorAlign.END,
+        });
+        unpairBtn.connect('clicked', () => {
+            this._forgetDevice();
+            return Clutter.EVENT_STOP;
+        });
+        deviceSubMenu.add_child(unpairBtn);
 
         const hasScrcpy = Scrcpy.checkScrcpy();
 
@@ -606,13 +603,34 @@ export const PhoneHubToggle = GObject.registerClass({
             }
         });
 
-        deviceSubMenu.menu.addMenuItem(smsItem);
-        deviceSubMenu.menu.addMenuItem(callNotifToggle);
-        deviceSubMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        deviceSubMenu.menu.addMenuItem(cameraToggle);
-        deviceSubMenu.menu.addMenuItem(mirrorToggle);
+        if (isPaired) {
+            deviceSubMenu.menu.addMenuItem(smsItem);
+            deviceSubMenu.menu.addMenuItem(callNotifToggle);
+            deviceSubMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            deviceSubMenu.menu.addMenuItem(cameraToggle);
+            deviceSubMenu.menu.addMenuItem(mirrorToggle);
+        }
 
         this._deviceSection.addMenuItem(deviceSubMenu);
+    }
+
+    _forgetDevice() {
+        const settings = Settings.loadSettings();
+        const ip = settings.phoneIp;
+
+        if (ip && this._isConnected) {
+            try {
+                const message = Soup.Message.new('POST', `http://${ip}:8080/unpair`);
+                SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, () => { });
+            } catch (e) {
+                console.error(`Failed to notify phone of unpair: ${e.message}`);
+            }
+        }
+
+        Settings.saveSettings({ phoneIp: "", deviceName: "" });
+        this._isConnected = false;
+        this.refreshDevices(true);
+        Main.notify("Phone HUB", "Device removed.");
     }
 
     /* ===============================
