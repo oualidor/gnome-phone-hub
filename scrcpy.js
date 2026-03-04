@@ -1,8 +1,24 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Adb from './adb.js';
 
-const SCRCPY_PATH = '/opt/scrcpy/scrcpy';
+/**
+ * Get scrcpy path dynamically
+ * @returns {string|null}
+ */
+export function getScrcpyPath() {
+    return '/opt/scrcpy/scrcpy'
+    // return GLib.find_program_in_path('scrcpy');
+}
+
+/**
+ * Check if scrcpy is installed
+ * @returns {boolean}
+ */
+export function checkScrcpy() {
+    return !!getScrcpyPath();
+}
 
 /**
  * Start camera using scrcpy
@@ -10,10 +26,16 @@ const SCRCPY_PATH = '/opt/scrcpy/scrcpy';
  * @param {Object} procs - Object to store reference to the process
  */
 export function startCamera(deviceId, procs) {
+    const scrcpyPath = getScrcpyPath();
+    if (!scrcpyPath) {
+        Main.notify("Phone HUB", "scrcpy not found. Please install it to use this feature.");
+        return;
+    }
+
     try {
         let proc = Gio.Subprocess.new(
             [
-                SCRCPY_PATH,
+                scrcpyPath,
                 '-s', deviceId,
                 '--video-source=camera',
                 '--camera-facing=back',
@@ -42,10 +64,16 @@ export function startCamera(deviceId, procs) {
  * @param {Object} procs - Object to store reference to the process
  */
 export function startMirroring(deviceId, procs) {
+    const scrcpyPath = getScrcpyPath();
+    if (!scrcpyPath) {
+        Main.notify("Phone HUB", "scrcpy not found. Please install it to use this feature.");
+        return;
+    }
+
     try {
         let proc = Gio.Subprocess.new(
             [
-                SCRCPY_PATH,
+                scrcpyPath,
                 '-s', deviceId
             ],
             Gio.SubprocessFlags.NONE
@@ -67,9 +95,10 @@ export function startMirroring(deviceId, procs) {
  * @param {Object} procs - Object to store reference to the process
  */
 export function startNotificationListener(deviceId, procs) {
+    const adbPath = Adb.getAdbPath() || 'adb';
     try {
         const argv = [
-            '/usr/bin/adb', '-s', deviceId,
+            adbPath, '-s', deviceId,
             'shell', 'logcat', '-b', 'events', '-v', 'brief', 'notification_enqueue:V', '*:S'
         ];
 

@@ -1,0 +1,58 @@
+.sms-dialog {
+    width: 600px;
+    height: 500px;
+    padding: 24px;
+    border-radius: 12px;
+    background-color: #242424;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sms-dialog-title {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin-bottom: 20px;
+    color: #ffffff;
+}
+
+.sms-dialog-scroll-view {
+    margin-bottom: 20px;
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.sms-dialog-item-button {
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition-duration: 100ms;
+}
+
+.sms-dialog-item-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.sms-dialog-item-button:active {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.sms-dialog-item-button.selected {
+    background-color: rgba(53, 132, 228, 0.2);
+    border: 1px solid #3584e4;
+}
+
+.sms-dialog-item {
+    padding: 12px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.sms-dialog-sender {
+    font-weight: bold;
+    color: #3584e4;
+    margin-bottom: 4px;
+}
+
+.sms-dialog-body {
+    color: #eeeeee;
+}
