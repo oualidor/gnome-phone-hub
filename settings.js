@@ -7,7 +7,7 @@ const SETTINGS_FILE = SETTINGS_DIR + '/settings.json';
 export function loadSettings() {
     const file = Gio.File.new_for_path(SETTINGS_FILE);
     if (!file.query_exists(null)) {
-        return { phoneIp: null, enableCallNotifications: true, deviceName: 'Paired Phone' };
+        return { phoneIp: null, enableCallNotifications: true, enablePhoneNotifications: true, deviceName: 'Paired Phone' };
     }
 
     try {
@@ -18,6 +18,9 @@ export function loadSettings() {
             if (data.enableCallNotifications === undefined) {
                 data.enableCallNotifications = true;
             }
+            if (data.enablePhoneNotifications === undefined) {
+                data.enablePhoneNotifications = true;
+            }
             if (!data.deviceName) {
                 data.deviceName = 'Paired Phone';
             }
@@ -26,7 +29,7 @@ export function loadSettings() {
     } catch (e) {
         console.error(`Error loading settings: ${e.message}`);
     }
-    return { phoneIp: null, enableCallNotifications: true };
+    return { phoneIp: null, enableCallNotifications: true, enablePhoneNotifications: true };
 }
 
 export function saveSettings(settings) {

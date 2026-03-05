@@ -39,27 +39,31 @@ export const PhoneHubToggle = GObject.registerClass({
         this._lastCallStatus = "IDLE";
         this._currentCallNotify = null;
 
-        // Connection health-check state
-        this._statusPollingId = null;
+        // Notification syncing state
+        this._notificationPollingId = null;
+        this._notifiedIds = new Set();
+        this._phoneNotificationSource = null;
+
+        // WebSocket state
+        this._wsConnection = null;
+        this._wsReconnectTimer = null;
+        this._wsIp = null;
         this._isConnected = false;
         const _initSettings = Settings.loadSettings();
         this._lastKnownDeviceName = _initSettings.deviceName || 'Paired Phone';
-
-
 
         this.connect('notify::checked', () => {
             if (this.checked) {
                 this._scanning = true;
                 this.subtitle = 'Connecting...';
                 this.refreshDevices(true);
-                this._startCallPolling();
-                this._startStatusPolling();
             } else {
                 this._scanning = false;
-                this._stopCallPolling();
-                this._stopStatusPolling();
+                this._disconnectWebSocket();
+                this._notifiedIds.clear();
                 this.stopAllProcesses();
                 this._deviceSection.removeAll();
+                if (this._topBarRef) this._topBarRef.updateVisibility(false);
                 this.subtitle = 'Disabled';
                 this._isConnected = false;
             }
@@ -67,150 +71,254 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
     /* ===============================
-       Connection Health-Check
+       WebSocket Connection Management
     =================================*/
-    _startStatusPolling() {
-        this._stopStatusPolling();
-        this._statusPollingId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
-            this._checkConnectionStatus().catch(e => console.error(`Status check error: ${e.message}`));
-            return GLib.SOURCE_CONTINUE;
+    _connectWebSocket(ip) {
+        if (this._wsConnection) return;
+        this._wsIp = ip;
+
+        const message = Soup.Message.new('GET', `ws://${ip}:8080/ws`);
+        const cancellable = new Gio.Cancellable();
+
+        // Hard abort after 5 seconds if phone is offline
+        const timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            if (!this._wsConnection) {
+                cancellable.cancel();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+
+        SoupSession.websocket_connect_async(message, null, null, null, cancellable, (session, res) => {
+            GLib.source_remove(timerId);
+            try {
+                this._wsConnection = session.websocket_connect_finish(res);
+                console.log(`Phone HUB: WebSocket connected to ${ip}`);
+
+                this._wsConnection.connect('message', (ws, type, message) => {
+                    this._onWebSocketMessage(type, message);
+                });
+
+                this._wsConnection.connect('closed', () => {
+                    this._onWebSocketClosed();
+                });
+
+                this._isConnected = true;
+                if (this._topBarRef) this._topBarRef.updateVisibility(true);
+
+                // Fetch full menu state immediately upon connection
+                this._fetchFullStateAndRebuildMenu(ip);
+
+            } catch (e) {
+                console.error(`Phone HUB: WebSocket connection failed: ${e.message}`);
+                this._onWebSocketClosed();
+            }
         });
     }
 
-    _stopStatusPolling() {
-        if (this._statusPollingId) {
-            GLib.source_remove(this._statusPollingId);
-            this._statusPollingId = null;
+    _disconnectWebSocket() {
+        this._wsIp = null;
+        if (this._wsReconnectTimer) {
+            GLib.source_remove(this._wsReconnectTimer);
+            this._wsReconnectTimer = null;
+        }
+        if (this._wsPingTimer) {
+            GLib.source_remove(this._wsPingTimer);
+            this._wsPingTimer = null;
+        }
+        if (this._wsConnection) {
+            this._wsConnection.close(Soup.WebsocketCloseCode.NORMAL, "User disconnected");
+            this._wsConnection = null;
         }
     }
 
-    async _checkConnectionStatus() {
-        const settings = Settings.loadSettings();
-        const ip = settings.phoneIp;
-        if (!ip) return;
+    _onWebSocketClosed() {
+        console.log("Phone HUB: WebSocket closed.");
 
-        const metadata = await this._getDeviceMetadata(ip);
-        const nowConnected = metadata !== null;
+        if (this._wsPingTimer) {
+            GLib.source_remove(this._wsPingTimer);
+            this._wsPingTimer = null;
+        }
 
-        if (!nowConnected && this._isConnected) {
-            this._isConnected = false;
-            this.subtitle = 'Disconnected';
-            this._deviceSection.removeAll();
-            let offlineInfo = new PopupMenu.PopupMenuItem(`${this._lastKnownDeviceName} (Disconnected)`);
-            offlineInfo.insert_child_at_index(new St.Icon({ icon_name: 'phone-symbolic', style_class: 'popup-menu-icon' }), 0);
-            offlineInfo.sensitive = false;
-            this._deviceSection.addMenuItem(offlineInfo);
-            let pairNewItem = new PopupMenu.PopupMenuItem('Pair New Device');
-            pairNewItem.add_child(new St.Widget({ x_expand: true }));
-            pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
-            pairNewItem.connect('activate', () => {
-                const dialog = new PairingDialog((newIp) => {
-                    Settings.saveSettings({ phoneIp: newIp });
-                    this.refreshDevices(true);
-                });
-                dialog.open();
+        this._wsConnection = null;
+        this._isConnected = false;
+        if (this._topBarRef) this._topBarRef.updateVisibility(false);
+        this.subtitle = 'Disconnected';
+
+        // Show offline UI
+        this._deviceSection.removeAll();
+        let offlineInfo = new PopupMenu.PopupMenuItem(`${this._lastKnownDeviceName} (Disconnected)`);
+        offlineInfo.insert_child_at_index(new St.Icon({ icon_name: 'phone-symbolic', style_class: 'popup-menu-icon' }), 0);
+        offlineInfo.sensitive = false;
+        this._deviceSection.addMenuItem(offlineInfo);
+
+        let pairNewItem = new PopupMenu.PopupMenuItem('Pair New Device');
+        pairNewItem.add_child(new St.Widget({ x_expand: true }));
+        pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
+        pairNewItem.connect('activate', () => {
+            const dialog = new PairingDialog((newIp) => {
+                Settings.saveSettings({ phoneIp: newIp });
+                this.refreshDevices(true);
             });
-            this._deviceSection.addMenuItem(pairNewItem);
-        } else if (nowConnected && !this._isConnected) {
-            this._isConnected = true;
-            this.refreshDevices(true);
-        }
+            dialog.open();
+        });
+        this._deviceSection.addMenuItem(pairNewItem);
+
+        this._scheduleWebSocketReconnect();
     }
 
-    /* ===============================
-       Call Polling & Notifications
-    =================================*/
-    _startCallPolling() {
-        const s = Settings.loadSettings();
-        if (s.enableCallNotifications === false) return;
-        this._stopCallPolling();
-        this._callPollingId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
-            this._pollCallStatus();
-            return GLib.SOURCE_CONTINUE;
+    _scheduleWebSocketReconnect() {
+        if (!this.checked || !this._wsIp) return;
+        if (this._wsReconnectTimer) return;
+
+        console.log(`Phone HUB: Scheduling WebSocket reconnect in 5s...`);
+        this._wsReconnectTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            this._wsReconnectTimer = null;
+            if (this.checked && this._wsIp) {
+                this._connectWebSocket(this._wsIp);
+            }
+            return GLib.SOURCE_REMOVE;
         });
     }
 
-    _stopCallPolling() {
-        if (this._callPollingId) {
-            GLib.source_remove(this._callPollingId);
-            this._callPollingId = null;
+    _onWebSocketMessage(type, message) {
+        if (type !== Soup.WebsocketDataType.TEXT) return;
+        try {
+            const text = new TextDecoder().decode(message.toArray());
+            const data = JSON.parse(text);
+
+            if (this._wsPingTimer) {
+                GLib.source_remove(this._wsPingTimer);
+            }
+            this._wsPingTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
+                console.log("Phone HUB: WebSocket ping timeout, closing connection");
+                if (this._wsConnection) {
+                    this._wsConnection.close(Soup.WebsocketCloseCode.ABNORMAL, "Ping timeout");
+                }
+                this._onWebSocketClosed();
+                return GLib.SOURCE_REMOVE;
+            });
+
+            if (data.type === "PING") {
+                if (this._wsConnection) {
+                    this._wsConnection.send_text("{\"type\":\"PONG\"}");
+                }
+            } else if (data.type === "CALL_STATUS") {
+                console.log(`Phone HUB: Received CALL_STATUS event: ${data.status} for number: ${data.number}`);
+                this._handleCallEvent(data.status, data.number);
+            } else if (data.type === "NOTIFICATION") {
+                this._handleNotificationEvent(data);
+            } else if (data.type === "CLEAR_ALL") {
+                this._notifiedIds.clear();
+            }
+        } catch (e) {
+            console.error(`WebSocket Parse Error: ${e.message}`);
         }
     }
 
-    async _pollCallStatus() {
-        try {
-            const settings = Settings.loadSettings();
-            const ip = settings.phoneIp;
-            if (!ip) return;
+    _handleCallEvent(status, number) {
+        if (status === "RINGING" && this._lastCallStatus !== "RINGING") {
+            const s = Settings.loadSettings();
+            if (s.enableCallNotifications === false) return;
 
-            const metadata = await this._getDeviceMetadata(ip);
-            if (!metadata) return;
-
-            const status = metadata.callStatus || "IDLE";
-            const number = metadata.callerNumber || "Unknown";
-
-            if (status === "RINGING" && this._lastCallStatus !== "RINGING") {
-                if (!this._notificationSource) {
-                    this._notificationSource = new MessageTray.Source({
-                        title: 'Phone HUB',
-                        iconName: 'phone-symbolic'
-                    });
-                    Main.messageTray.add(this._notificationSource);
-                }
-
-
-                const notification = new MessageTray.Notification({
-                    source: this._notificationSource,
-                    title: "Incoming Call",
-                    body: `Caller: ${number}`,
-                    urgency: MessageTray.Urgency.CRITICAL,
+            if (!this._notificationSource) {
+                this._notificationSource = new MessageTray.Source({
+                    title: 'Phone HUB',
+                    iconName: 'phone-symbolic'
                 });
-                notification.addAction('Answer', () => {
-                    this._sendCallAction(ip, 'answer_call');
-                });
-                notification.addAction('Decline', () => {
-                    this._sendCallAction(ip, 'decline_call');
-                });
-
-                this._notificationSource.addNotification(notification);
-                this._currentCallNotify = notification;
-            } else if (status === "IDLE" && this._lastCallStatus === "RINGING") {
-                // Call ended or was picked up
-                if (this._currentCallNotify) {
-                    this._currentCallNotify.destroy();
-                    this._currentCallNotify = null;
-                }
+                this._notificationSource.connect('destroy', () => { this._notificationSource = null; });
+                Main.messageTray.add(this._notificationSource);
             }
 
-            this._lastCallStatus = status;
+            const notification = new MessageTray.Notification({
+                source: this._notificationSource,
+                title: "Incoming Call",
+                body: number || 'Unknown Caller',
+                urgency: MessageTray.Urgency.CRITICAL,
+            });
+            notification.addAction('Answer', () => {
+                this._sendCallAction(this._wsIp, 'answer_call');
+            });
+            notification.addAction('Decline', () => {
+                this._sendCallAction(this._wsIp, 'decline_call');
+            });
+
+            notification.connect('destroy', () => {
+                if (this._currentCallNotify === notification)
+                    this._currentCallNotify = null;
+            });
+            this._notificationSource.addNotification(notification);
+            this._currentCallNotify = notification;
+        } else if (status === "RINGING" && this._currentCallNotify) {
+            // Update name/number if it arrived late
+            if (number && (this._currentCallNotify.body === "Unknown Caller" || this._currentCallNotify.body === "")) {
+                this._currentCallNotify.update(this._currentCallNotify.title, number);
+            }
+        } else if (status !== "RINGING") {
+            if (this._currentCallNotify) {
+                this._currentCallNotify.destroy();
+                this._currentCallNotify = null;
+            }
         }
-        catch (e) {
-            console.error(`Call polling error: ${e.message}`);
-        }
+        this._lastCallStatus = status;
     }
 
     _sendCallAction(ip, action) {
-        try {
-            const message = Soup.Message.new('POST', `http://${ip}:8080/${action}`);
-            SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
-                try {
-                    const bytes = session.send_and_read_finish(res);
-                    if (message.status_code === 200) {
-                        console.log(`Call action ${action} successful`);
-                        if (this._currentCallNotify) {
-                            this._currentCallNotify.destroy();
-                            this._currentCallNotify = null;
-                        }
-                    } else {
-                        console.error(`Call action ${action} failed with status ${message.status_code}`);
-                    }
-                } catch (e) {
-                    console.error(`Call action ${action} error: ${e.message}`);
-                }
-            });
-        } catch (e) {
-            console.error(`Call action request failed: ${e.message}`);
+        if (!ip) return;
+        const msg = Soup.Message.new('POST', `http://${ip}:8080/${action}`);
+        const session = new Soup.Session();
+        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (source, result) => {
+            try {
+                session.send_and_read_finish(result);
+                console.log(`Phone HUB: Call action '${action}' sent successfully.`);
+            } catch (e) {
+                console.error(`Phone HUB: Failed to send call action '${action}': ${e.message}`);
+            }
+        });
+    }
+
+    _handleNotificationEvent(notif) {
+        const s = Settings.loadSettings();
+        if (s.enablePhoneNotifications === false) return;
+
+        if (!this._notifiedIds.has(notif.id)) {
+            this._notifiedIds.add(notif.id);
+            this._showPhoneNotification(this._wsIp, notif);
         }
+    }
+
+    _showPhoneNotification(ip, notif) {
+        if (!this._phoneNotificationSource) {
+            this._phoneNotificationSource = new MessageTray.Source({
+                title: 'Phone HUB',
+                iconName: 'smartphone-symbolic'
+            });
+            this._phoneNotificationSource.connect('destroy', () => { this._phoneNotificationSource = null; });
+            Main.messageTray.add(this._phoneNotificationSource);
+        }
+
+        const msg = new MessageTray.Notification({
+            source: this._phoneNotificationSource,
+            title: notif.title || notif.packageName,
+            body: notif.text || '',
+            urgency: MessageTray.Urgency.NORMAL,
+        });
+
+        msg.addAction('Clear on Phone', () => {
+            this._dismissPhoneNotification(ip, notif.id);
+        });
+
+        this._phoneNotificationSource.addNotification(msg);
+    }
+
+    _dismissPhoneNotification(ip, id) {
+        try {
+            const message = Soup.Message.new('POST', `http://${ip}:8080/notifications/clear`);
+            message.set_request_body_from_bytes(
+                'application/json',
+                new GLib.Bytes(new TextEncoder().encode(JSON.stringify({ id: id })))
+            );
+            SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, () => { });
+        } catch (e) { }
     }
 
     /* ===============================
@@ -229,8 +337,23 @@ export const PhoneHubToggle = GObject.registerClass({
             return true;
         }
 
+        if (this._wsConnection && this._wsIp !== pairedIp) {
+            this._disconnectWebSocket();
+        }
+
+        if (!this._wsConnection) {
+            this._connectWebSocket(pairedIp);
+        } else if (force) {
+            this._fetchFullStateAndRebuildMenu(pairedIp);
+        }
+        return true;
+    }
+
+    async _fetchFullStateAndRebuildMenu(pairedIp) {
+        const settings = Settings.loadSettings();
+
         // 1. Ping the paired IP specifically
-        console.log(`Phone HUB: Refreshing status for paired IP: ${pairedIp}`);
+        console.log(`Phone HUB: Fetching full state for IP: ${pairedIp}`);
         let metadata = await this._getDeviceMetadata(pairedIp);
 
         // 2. Check ADB ONLY to see if the paired device is connected via USB
@@ -258,6 +381,7 @@ export const PhoneHubToggle = GObject.registerClass({
             this._isConnected = false;
             this.subtitle = 'Disconnected';
             this._deviceSection.removeAll();
+            if (this._topBarRef) this._topBarRef.updateVisibility(false);
             // Show the last known device as disconnected so user knows which phone is paired
             let pairedIpForOffline = settings.phoneIp;
             if (pairedIpForOffline) {
@@ -317,8 +441,6 @@ export const PhoneHubToggle = GObject.registerClass({
             isPaired: isPaired,
             battery: adbBattery
         }]);
-
-        return true;
     }
 
     async _getDeviceMetadata(ip) {
@@ -339,7 +461,7 @@ export const PhoneHubToggle = GObject.registerClass({
                     try {
                         const bytes = session.send_and_read_finish(res);
                         if (message.status_code === 200) {
-                            const data = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+                            const data = JSON.parse(new TextDecoder().decode(bytes.toArray()));
                             resolve({
                                 name: data.deviceName || "Phone",
                                 authorized: data.authorized,
@@ -384,10 +506,15 @@ export const PhoneHubToggle = GObject.registerClass({
             infoItem.sensitive = false;
             this._deviceSection.addMenuItem(infoItem);
             this.subtitle = 'Disconnected';
+            if (this._topBarRef) this._topBarRef.updateVisibility(false);
         } else {
             visibleDevices.forEach(dev => {
                 let connectionLabel = dev.isAdb ? `${dev.name} (ADB + Network)` : `${dev.name} (Network)`;
                 this._addDeviceToMenu(dev.id, connectionLabel, !dev.isAdb, dev.isPaired);
+                if (this._topBarRef) {
+                    this._topBarRef.updateVisibility(true);
+                    this._topBarRef.rebuildMenu(dev.id, dev.name, dev.isPaired, !dev.isAdb);
+                }
             });
             this.subtitle = visibleDevices[0].isPaired ? 'Connected' : 'Action Required';
         }
@@ -596,16 +723,34 @@ export const PhoneHubToggle = GObject.registerClass({
             const s = Settings.loadSettings();
             s.enableCallNotifications = state;
             Settings.saveSettings(s);
-            if (state) {
-                this._startCallPolling();
-            } else {
-                this._stopCallPolling();
+        });
+
+        /* ---------- Phone Notifications ---------- */
+        let phoneNotifToggle = new PopupMenu.PopupSwitchMenuItem(
+            'Sync Notifications',
+            callNotifSettings.enablePhoneNotifications !== false
+        );
+        phoneNotifToggle.insert_child_at_index(new St.Icon({
+            icon_name: 'mail-unread-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+        if (!isPaired) {
+            phoneNotifToggle.sensitive = false;
+            phoneNotifToggle.label.text += ' (Not Paired)';
+        }
+        phoneNotifToggle.connect('toggled', (_item, state) => {
+            const s = Settings.loadSettings();
+            s.enablePhoneNotifications = state;
+            Settings.saveSettings(s);
+            if (!state) {
+                this._notifiedIds.clear();
             }
         });
 
         if (isPaired) {
-            deviceSubMenu.menu.addMenuItem(smsItem);
+            // deviceSubMenu.menu.addMenuItem(smsItem);
             deviceSubMenu.menu.addMenuItem(callNotifToggle);
+            deviceSubMenu.menu.addMenuItem(phoneNotifToggle);
             deviceSubMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             deviceSubMenu.menu.addMenuItem(cameraToggle);
             deviceSubMenu.menu.addMenuItem(mirrorToggle);
@@ -628,7 +773,8 @@ export const PhoneHubToggle = GObject.registerClass({
         }
 
         Settings.saveSettings({ phoneIp: "", deviceName: "" });
-        this._isConnected = false;
+        this._disconnectWebSocket();
+        if (this._topBarRef) this._topBarRef.updateVisibility(false);
         this.refreshDevices(true);
         Main.notify("Phone HUB", "Device removed.");
     }
