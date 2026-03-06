@@ -142,7 +142,8 @@ export const PairingDialog = GObject.registerClass({
         this._statusLabel.text = `Sending pairing request to ${ip}...`;
 
         try {
-            const message = Soup.Message.new('POST', `http://${ip}:8080/pair`);
+            const hostname = GLib.get_host_name();
+            const message = Soup.Message.new('POST', `http://${ip}:8080/pair?deviceName=${encodeURIComponent(hostname)}`);
             SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                 try {
                     const bytes = session.send_and_read_finish(res);

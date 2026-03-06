@@ -7,6 +7,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Settings from './settings.js';
 import * as Scrcpy from './scrcpy.js';
 import * as Adb from './adb.js';
+import * as Mount from './mount.js';
 
 export const PhoneHubTopBarMenu = GObject.registerClass({
     GTypeName: 'PhoneHubTopBarMenu',
@@ -74,6 +75,55 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         this.menu.addMenuItem(titleItem);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        // 1.5 SSHFS Mount Toggle
+        const mountPoint = settings.sshfsMountPoint;
+        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint));
+        let mountToggle = this._mountToggle;
+        mountToggle.insert_child_at_index(new St.Icon({
+            icon_name: 'folder-remote-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+        if (!Mount.checkSshfs()) {
+            mountToggle.sensitive = false;
+            mountToggle.label.text += ' (sshfs missing)';
+        }
+        mountToggle.connect('toggled', async (item, state) => {
+            if (state) {
+                try {
+                    const s = Settings.loadSettings();
+                    let ip = s.phoneIp;
+
+                    if (!ip) {
+                        ip = isNetwork ? deviceId : null;
+                        if (!isNetwork) {
+                            const ips = await Adb.getDeviceIps(deviceId);
+                            ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                        }
+                    }
+                    if (!ip) throw new Error("Could not find device IP");
+
+                    await Mount.mountDevice(ip, s);
+                    Main.notify("Phone HUB", "Phone files mounted at " + mountPoint);
+                    if (this._toggleRef) this._toggleRef.syncMountState(true);
+                } catch (e) {
+                    Main.notify("Phone HUB", "Failed to mount: " + e.message);
+                    mountToggle.setToggleState(false);
+                }
+            } else {
+                try {
+                    await Mount.unmountDevice(mountPoint);
+                    Main.notify("Phone HUB", "Phone files unmounted");
+                    if (this._toggleRef) this._toggleRef.syncMountState(false);
+                } catch (e) {
+                    Main.notify("Phone HUB", "Failed to unmount: " + e.message);
+                    mountToggle.setToggleState(true);
+                }
+            }
+        });
+        this.menu.addMenuItem(mountToggle);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
         // 2. Camera Toggle
         let cameraToggle = new PopupMenu.PopupSwitchMenuItem('Use as webcam', false);
         cameraToggle.insert_child_at_index(new St.Icon({
@@ -117,25 +167,31 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
             style_class: 'popup-menu-icon',
         }), 0);
         smsItem.connect('activate', async () => {
-            // Re-use logic to pop open the GTK window
             if (!this._toggleRef) return;
             try {
-                let ip = isNetwork ? deviceId : null;
-                if (!isNetwork) {
-                    const ips = await Adb.getDeviceIps(deviceId);
-                    ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                const s = Settings.loadSettings();
+                let ip = s.phoneIp;
+                if (!ip) {
+                    ip = isNetwork ? deviceId : null;
+                    if (!isNetwork) {
+                        const ips = await Adb.getDeviceIps(deviceId);
+                        ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                    }
                 }
                 const extensionPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
                 const scriptPath = `${extensionPath}/smsWindow.js`;
 
                 let argv = ['gjs', '-m', scriptPath];
                 if (ip) argv.push('--host', ip);
+                if (s.restToken) argv.push('--token', s.restToken);
 
                 import('gi://Gio').then(GioMod => {
                     const Gio = GioMod.default;
                     Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
                 });
-            } catch (e) { console.error(e); }
+            } catch (e) {
+                console.error(e);
+            }
         });
 
         // 5. Call Notifications
@@ -197,5 +253,11 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         this.menu.addMenuItem(mirrorToggle);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addMenuItem(unpairItem);
+    }
+
+    syncMountState(state) {
+        if (this._mountToggle && this._mountToggle.state !== state) {
+            this._mountToggle.setToggleState(state);
+        }
     }
 });

@@ -1,13 +1,22 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-const SETTINGS_DIR = GLib.get_user_data_dir() + '/phone-hub';
+export const SETTINGS_DIR = GLib.get_user_data_dir() + '/phone-hub';
 const SETTINGS_FILE = SETTINGS_DIR + '/settings.json';
 
 export function loadSettings() {
     const file = Gio.File.new_for_path(SETTINGS_FILE);
     if (!file.query_exists(null)) {
-        return { phoneIp: null, enableCallNotifications: true, enablePhoneNotifications: true, deviceName: 'Paired Phone' };
+        return {
+            phoneIp: null,
+            enableCallNotifications: true,
+            enablePhoneNotifications: true,
+            deviceName: 'Paired Phone',
+            sshfsPort: '2222',
+            sshfsPath: '/sdcard',
+            sshfsUser: 'phonehub',
+            sshfsMountPoint: GLib.get_home_dir() + '/PhoneHub'
+        };
     }
 
     try {
@@ -24,6 +33,10 @@ export function loadSettings() {
             if (!data.deviceName) {
                 data.deviceName = 'Paired Phone';
             }
+            if (!data.sshfsPort) data.sshfsPort = '2222';
+            if (!data.sshfsPath) data.sshfsPath = '/sdcard';
+            if (!data.sshfsUser) data.sshfsUser = 'phonehub';
+            if (!data.sshfsMountPoint) data.sshfsMountPoint = GLib.get_home_dir() + '/PhoneHub';
             return data;
         }
     } catch (e) {

@@ -11,6 +11,7 @@ import St from 'gi://St';
 import * as Adb from './adb.js';
 import * as Scrcpy from './scrcpy.js';
 import * as Settings from './settings.js';
+import * as Mount from './mount.js';
 import { PairingDialog } from './pairingDialog.js';
 
 const SoupSession = new Soup.Session({ timeout: 5 });
@@ -100,8 +101,8 @@ export const PhoneHubToggle = GObject.registerClass({
                     this._onWebSocketMessage(type, message);
                 });
 
-                this._wsConnection.connect('closed', () => {
-                    this._onWebSocketClosed();
+                this._wsConnection.connect('closed', (ws) => {
+                    this._onWebSocketClosed(ws);
                 });
 
                 this._isConnected = true;
@@ -133,8 +134,14 @@ export const PhoneHubToggle = GObject.registerClass({
         }
     }
 
-    _onWebSocketClosed() {
+    _onWebSocketClosed(ws) {
         console.log("Phone HUB: WebSocket closed.");
+
+        if (ws && ws.get_close_code() === Soup.WebsocketCloseCode.POLICY_VIOLATION) {
+            console.log("Phone HUB: Unpaired from phone side detected.");
+            this._forgetDevice();
+            return;
+        }
 
         if (this._wsPingTimer) {
             GLib.source_remove(this._wsPingTimer);
@@ -146,29 +153,7 @@ export const PhoneHubToggle = GObject.registerClass({
         if (this._topBarRef) this._topBarRef.updateVisibility(false);
         this.subtitle = 'Disconnected';
 
-        // Show offline UI
-        this._deviceSection.removeAll();
-        let offlineInfo = new PopupMenu.PopupMenuItem(`${this._lastKnownDeviceName} (Disconnected)`);
-        offlineInfo.insert_child_at_index(new St.Icon({ icon_name: 'phone-symbolic', style_class: 'popup-menu-icon' }), 0);
-        offlineInfo.sensitive = false;
-        this._deviceSection.addMenuItem(offlineInfo);
-
-        let pairNewItem = new PopupMenu.PopupMenuItem('Pair New Device');
-        pairNewItem.add_child(new St.Widget({ x_expand: true }));
-        pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
-        pairNewItem.connect('activate', () => {
-            const dialog = new PairingDialog((newIp, restToken, wsToken) => {
-                Settings.saveSettings({
-                    phoneIp: newIp,
-                    restToken: restToken,
-                    wsToken: wsToken
-                });
-                this.refreshDevices(true);
-            });
-            dialog.open();
-        });
-        this._deviceSection.addMenuItem(pairNewItem);
-
+        this.refreshDevices(true);
         this._scheduleWebSocketReconnect();
     }
 
@@ -215,6 +200,9 @@ export const PhoneHubToggle = GObject.registerClass({
                 this._handleNotificationEvent(data);
             } else if (data.type === "CLEAR_ALL") {
                 this._notifiedIds.clear();
+            } else if (data.type === "UNPAIR") {
+                console.log("Phone HUB: Received UNPAIR message from phone.");
+                this._forgetDevice();
             }
         } catch (e) {
             console.error(`WebSocket Parse Error: ${e.message}`);
@@ -504,14 +492,42 @@ export const PhoneHubToggle = GObject.registerClass({
         this._deviceSection.removeAll();
         const hasAdb = await Adb.checkAdb();
 
-        // --- Pair New Device item (Always Visible) ---
-        let pairNewItem = new PopupMenu.PopupMenuItem('Pair New Device');
-        pairNewItem.add_child(new St.Widget({ x_expand: true }))
-        pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
-        pairNewItem.connect('activate', () => {
-            const dialog = new PairingDialog((ip, restToken, wsToken) => {
+        /* ---------- Actions Row (Pair & Settings) ---------- */
+        let actionsItem = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            can_focus: false
+        });
+
+        let actionsBox = new St.BoxLayout({
+            x_expand: true,
+            style: 'spacing: 12px; margin: 0 12px;'
+        });
+
+        let boxPair = new St.BoxLayout({
+            style: 'spacing: 6px;',
+        });
+
+        boxPair.add_child(new St.Icon({
+            icon_name: 'list-add-symbolic',
+            style_class: 'popup-menu-icon',
+        }));
+
+        boxPair.add_child(new St.Label({
+            text: 'New Device',
+            y_align: Clutter.ActorAlign.CENTER
+        }));
+
+        let pairBtn = new St.Button({
+            child: boxPair,
+            style_class: 'button phone-hub-btn',
+            x_expand: true,
+            can_focus: true
+        });
+        pairBtn.connect('clicked', () => {
+            this.menu.close();
+            const dialog = new PairingDialog((newIp, restToken, wsToken) => {
                 Settings.saveSettings({
-                    phoneIp: ip,
+                    phoneIp: newIp,
                     restToken: restToken,
                     wsToken: wsToken
                 });
@@ -519,7 +535,39 @@ export const PhoneHubToggle = GObject.registerClass({
             });
             dialog.open();
         });
-        this._deviceSection.addMenuItem(pairNewItem);
+
+        let box = new St.BoxLayout();
+
+        box.add_child(new St.Icon({
+            icon_name: 'folder-open-symbolic',
+            style_class: 'popup-menu-icon',
+            style: 'margin-right: 6px;',
+        }));
+
+        box.add_child(new St.Label({
+            text: 'Settings'
+        }));
+
+        let settingsBtn = new St.Button({
+            child: box,
+            style_class: 'button phone-hub-btn',
+            can_focus: true,
+        });
+        settingsBtn.connect('clicked', () => {
+            this.menu.close();
+            const uri = `file://${Settings.SETTINGS_DIR}`;
+            try {
+                Gio.AppInfo.launch_default_for_uri(uri, null);
+            } catch (e) {
+                console.error(`Failed to open settings folder: ${e.message}`);
+                Main.notify("Phone HUB", "Failed to open settings folder.");
+            }
+        });
+
+        actionsBox.add_child(pairBtn);
+        actionsBox.add_child(settingsBtn);
+        actionsItem.add_child(actionsBox);
+        this._deviceSection.addMenuItem(actionsItem);
 
         if (visibleDevices.length === 0) {
             let infoItem = new PopupMenu.PopupMenuItem('No paired devices');
@@ -589,7 +637,8 @@ export const PhoneHubToggle = GObject.registerClass({
                 Main.notify("Phone HUB", "Pairing request sent. Please check your phone.");
 
                 try {
-                    const message = Soup.Message.new('POST', `http://${ip}:8080/pair`);
+                    const hostname = GLib.get_host_name();
+                    const message = Soup.Message.new('POST', `http://${ip}:8080/pair?deviceName=${encodeURIComponent(hostname)}`);
                     SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                         try {
                             const bytes = session.send_and_read_finish(res);
@@ -606,6 +655,60 @@ export const PhoneHubToggle = GObject.registerClass({
             });
         }
         deviceSubMenu.menu.addMenuItem(pairItem);
+
+        deviceSubMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        /* ---------- SSHFS Mount ---------- */
+        const sshfsSettings = Settings.loadSettings();
+        const mountPoint = sshfsSettings.sshfsMountPoint;
+        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint));
+        let mountToggle = this._mountToggle;
+        mountToggle.insert_child_at_index(new St.Icon({
+            icon_name: 'folder-remote-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+
+        if (!isPaired || !Mount.checkSshfs()) {
+            mountToggle.sensitive = false;
+            if (!isPaired) mountToggle.label.text += ' (Not Paired)';
+            else mountToggle.label.text += ' (sshfs missing)';
+        }
+
+        mountToggle.connect('toggled', async (item, state) => {
+            if (state) {
+                try {
+                    const s = Settings.loadSettings();
+                    let ip = s.phoneIp;
+
+                    if (!ip) {
+                        ip = isNetwork ? deviceId : null;
+                        if (!isNetwork) {
+                            const ips = await Adb.getDeviceIps(deviceId);
+                            ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                        }
+                    }
+
+                    if (!ip) throw new Error("Could not find device IP");
+
+                    await Mount.mountDevice(ip, s);
+                    Main.notify("Phone HUB", "Phone files mounted at " + mountPoint);
+                    if (this._topBarRef) this._topBarRef.syncMountState(true);
+                } catch (e) {
+                    Main.notify("Phone HUB", "Failed to mount: " + e.message);
+                    mountToggle.setToggleState(false);
+                }
+            } else {
+                try {
+                    await Mount.unmountDevice(mountPoint);
+                    Main.notify("Phone HUB", "Phone files unmounted");
+                    if (this._topBarRef) this._topBarRef.syncMountState(false);
+                } catch (e) {
+                    Main.notify("Phone HUB", "Failed to unmount: " + e.message);
+                    mountToggle.setToggleState(true);
+                }
+            }
+        });
+        deviceSubMenu.menu.addMenuItem(mountToggle);
 
         deviceSubMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -796,6 +899,11 @@ export const PhoneHubToggle = GObject.registerClass({
             }
         }
 
+        const s = Settings.loadSettings();
+        if (s.sshfsMountPoint && Mount.isMounted(s.sshfsMountPoint)) {
+            Mount.unmountDevice(s.sshfsMountPoint).catch(e => console.error(e));
+        }
+
         Settings.saveSettings({ phoneIp: "", deviceName: "" });
         this._disconnectWebSocket();
         if (this._topBarRef) this._topBarRef.updateVisibility(false);
@@ -844,6 +952,18 @@ export const PhoneHubToggle = GObject.registerClass({
             if (procs.notifications) procs.notifications.force_exit();
         }
         this._activeProcesses.clear();
+
+        const s = Settings.loadSettings();
+        if (s.sshfsMountPoint && Mount.isMounted(s.sshfsMountPoint)) {
+            Mount.unmountDevice(s.sshfsMountPoint).catch(e => console.error(e));
+        }
+
         this._scanning = true;
+    }
+
+    syncMountState(state) {
+        if (this._mountToggle && this._mountToggle.state !== state) {
+            this._mountToggle.setToggleState(state);
+        }
     }
 });

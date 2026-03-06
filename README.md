@@ -1,14 +1,20 @@
 # Phone HUB 📱
 
-Phone HUB is a GNOME Shell Extension that integrates your Android device directly into your Quick Settings menu. It allows you to monitor your phone's battery life and transform your device into a high-quality (1080p 60fps) Linux webcam with a single toggle.
+Phone HUB is a GNOME Shell Extension that integrates your Android device directly into your Quick Settings menu.
 
 
 
 ## ✨ Features
-* **Live Battery Monitoring:** See your phone's charge percentage directly in the GNOME menu.
-* **Pro Webcam Toggle:** One-click activation of your phone as a virtual camera (`/dev/video42`).
-* **Background Processing:** Uses `scrcpy` and `v4l2loopback` to stream video with ultra-low latency.
-* **Smart Scanning:** Automatically detects connected devices via ADB.
+* **Live Battery Monitoring:** Mount you phone as a storage device on your Linux system.
+
+* **Calls Notifications:** Respong to your calls from you PC.
+
+* **Notifications:** Get notifications from your phone on your PC.
+
+* **Phone mirroring:** Full control of your phone from your PC.
+
+* **Pro Webcam Toggle:** One-click activation of your phone as a virtual camera
+
 
 ---
 
@@ -20,7 +26,7 @@ Before installing the extension, you must set up your environment:
 Install the core dependencies on your Debian/Ubuntu system:
 ```bash
 sudo apt update
-sudo apt install adb scrcpy v4l2loopback-dkms v4l2loopback-utils
+sudo apt install adb scrcpy v4l2loopback-dkms v4l2loopback-utils sshfs sshpass
 
 ```
 ### 2. Define the virtual device options
@@ -35,11 +41,13 @@ sudo modprobe v4l2loopback
 ```
 
 ### 3. Android Device Configuration
-Enable Developer Options: Go to Settings > About Phone and tap Build Number 7 times.
+To use adb and scrcpy, you need to enable USB debugging on your Android device.
 
-Enable USB Debugging: Found inside Developer Options.
+1. Enable Developer Options: Go to Settings > About Phone and tap Build Number 7 times.
 
-Trust Connection: Connect via USB and select "Always allow from this computer" when prompted.
+2. Enable USB Debugging: Found inside Developer Options.
+
+3. Trust Connection: Connect via USB and select "Always allow from this computer" when prompted.
 
 
 Author: Oualid Khial
