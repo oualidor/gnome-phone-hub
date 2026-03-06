@@ -8,6 +8,7 @@ import Soup from 'gi://Soup?version=3.0';
 import GObject from 'gi://GObject';
 
 let SMS_URL = 'http://localhost:8080/sms';
+let TOKEN = '';
 
 // Parse arguments
 const args = System.arguments;
@@ -15,6 +16,13 @@ for (let i = 0; i < args.length; i++) {
     if (args[i] === '--host' && args[i + 1]) {
         SMS_URL = `http://${args[i + 1]}:8080/sms`;
     }
+    if (args[i] === '--token' && args[i + 1]) {
+        TOKEN = args[i + 1];
+    }
+}
+
+if (TOKEN) {
+    SMS_URL += `?token=${TOKEN}`;
 }
 const STORAGE_DIR = GLib.get_user_data_dir() + '/phone-hub';
 const STORAGE_PATH = STORAGE_DIR + '/sms_history.json';

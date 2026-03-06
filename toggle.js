@@ -77,7 +77,9 @@ export const PhoneHubToggle = GObject.registerClass({
         if (this._wsConnection) return;
         this._wsIp = ip;
 
-        const message = Soup.Message.new('GET', `ws://${ip}:8080/ws`);
+        const s = Settings.loadSettings();
+        const url = s.wsToken ? `ws://${ip}:8080/ws?token=${s.wsToken}` : `ws://${ip}:8080/ws`;
+        const message = Soup.Message.new('GET', url);
         const cancellable = new Gio.Cancellable();
 
         // Hard abort after 5 seconds if phone is offline
@@ -155,8 +157,12 @@ export const PhoneHubToggle = GObject.registerClass({
         pairNewItem.add_child(new St.Widget({ x_expand: true }));
         pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
         pairNewItem.connect('activate', () => {
-            const dialog = new PairingDialog((newIp) => {
-                Settings.saveSettings({ phoneIp: newIp });
+            const dialog = new PairingDialog((newIp, restToken, wsToken) => {
+                Settings.saveSettings({
+                    phoneIp: newIp,
+                    restToken: restToken,
+                    wsToken: wsToken
+                });
                 this.refreshDevices(true);
             });
             dialog.open();
@@ -264,7 +270,9 @@ export const PhoneHubToggle = GObject.registerClass({
 
     _sendCallAction(ip, action) {
         if (!ip) return;
-        const msg = Soup.Message.new('POST', `http://${ip}:8080/${action}`);
+        const s = Settings.loadSettings();
+        const url = `http://${ip}:8080/${action}${s.restToken ? `?token=${s.restToken}` : ''}`;
+        const msg = Soup.Message.new('POST', url);
         const session = new Soup.Session();
         session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (source, result) => {
             try {
@@ -312,7 +320,9 @@ export const PhoneHubToggle = GObject.registerClass({
 
     _dismissPhoneNotification(ip, id) {
         try {
-            const message = Soup.Message.new('POST', `http://${ip}:8080/notifications/clear`);
+            const s = Settings.loadSettings();
+            const url = `http://${ip}:8080/notifications/clear${s.restToken ? `?token=${s.restToken}` : ''}`;
+            const message = Soup.Message.new('POST', url);
             message.set_request_body_from_bytes(
                 'application/json',
                 new GLib.Bytes(new TextEncoder().encode(JSON.stringify({ id: id })))
@@ -412,8 +422,12 @@ export const PhoneHubToggle = GObject.registerClass({
             pairNewItem.add_child(new St.Widget({ x_expand: true }));
             pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
             pairNewItem.connect('activate', () => {
-                const dialog = new PairingDialog((newIp) => {
-                    Settings.saveSettings({ phoneIp: newIp });
+                const dialog = new PairingDialog((newIp, restToken, wsToken) => {
+                    Settings.saveSettings({
+                        phoneIp: newIp,
+                        restToken: restToken,
+                        wsToken: wsToken
+                    });
                     this.refreshDevices(true);
                 });
                 dialog.open();
@@ -446,7 +460,9 @@ export const PhoneHubToggle = GObject.registerClass({
     async _getDeviceMetadata(ip) {
         return new Promise((resolve) => {
             try {
-                const message = Soup.Message.new('GET', `http://${ip}:8080/`);
+                const s = Settings.loadSettings();
+                const url = s.restToken ? `http://${ip}:8080/?token=${s.restToken}` : `http://${ip}:8080/`;
+                const message = Soup.Message.new('GET', url);
                 const cancellable = new Gio.Cancellable();
 
                 // Hard abort after 5 seconds
@@ -493,8 +509,12 @@ export const PhoneHubToggle = GObject.registerClass({
         pairNewItem.add_child(new St.Widget({ x_expand: true }))
         pairNewItem.add_child(new St.Icon({ icon_name: 'network-transmit-receive-symbolic' }));
         pairNewItem.connect('activate', () => {
-            const dialog = new PairingDialog((ip) => {
-                Settings.saveSettings({ phoneIp: ip });
+            const dialog = new PairingDialog((ip, restToken, wsToken) => {
+                Settings.saveSettings({
+                    phoneIp: ip,
+                    restToken: restToken,
+                    wsToken: wsToken
+                });
                 this.refreshDevices(true);
             });
             dialog.open();
@@ -656,9 +676,13 @@ export const PhoneHubToggle = GObject.registerClass({
             const extensionPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
             const scriptPath = `${extensionPath}/smsWindow.js`;
 
+            const s = Settings.loadSettings();
             let argv = ['gjs', '-m', scriptPath];
             if (ip) {
                 argv.push('--host', ip);
+            }
+            if (s.restToken) {
+                argv.push('--token', s.restToken);
             }
 
             try {

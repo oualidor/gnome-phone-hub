@@ -6,6 +6,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 import * as Scanner from './scanner.js';
+import { PairingServer } from './pairingServer.js';
 
 const SoupSession = new Soup.Session();
 
@@ -41,16 +42,22 @@ export const PairingDialog = GObject.registerClass({
         mainBox.add_child(this._discoveryBox);
 
         this._discoveryLabel = new St.Label({
-            text: 'Scanning network for phones...',
-            style: 'font-size: 0.9em; color: #aaa;',
+            text: 'Scan this QR code with the Phone HUB app:',
+            style: 'font-size: 1.0em; color: #eee; text-align: center;',
         });
         this._discoveryBox.add_child(this._discoveryLabel);
 
-        this._deviceList = new St.BoxLayout({
-            vertical: true,
-            style: 'spacing: 5px;',
+        this._qrBin = new St.Bin({
+            style: 'background-color: white; padding: 10px; margin: 10px auto; border-radius: 5px;',
+            x_align: Clutter.ActorAlign.CENTER,
         });
-        this._discoveryBox.add_child(this._deviceList);
+        this._discoveryBox.add_child(this._qrBin);
+
+        this._qrImage = new St.Icon({
+            icon_size: 200,
+            style: 'color: black;', // Some themes might invert it otherwise
+        });
+        this._qrBin.set_child(this._qrImage);
 
         // --- Manual Section ---
         const separator = new St.Widget({
@@ -90,47 +97,42 @@ export const PairingDialog = GObject.registerClass({
             },
         ]);
 
-        this._startDiscovery();
+        this._setupPairing();
     }
 
-    async _startDiscovery() {
-        try {
+    async _setupPairing() {
+        this._pairingServer = new PairingServer((phoneIp) => {
+            this._onPairRequested(phoneIp);
+        });
+
+        if (this._pairingServer.start()) {
             const subnet = await Scanner.findLocalSubnet();
-            if (!subnet) {
-                this._discoveryLabel.text = 'Could not detect local network.';
-                return;
-            }
+            const pcIp = subnet ? subnet.ip : '127.0.0.1';
 
-            const devices = await Scanner.scanNetwork(subnet);
-            this._deviceList.destroy_all_children();
+            // Generate QR Code URL
+            // phonehub://pair?ip=PC_IP&port=8081
+            const pairingData = encodeURIComponent(`phonehub://pair?ip=${pcIp}&port=8081`);
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${pairingData}`;
 
-            if (devices.length === 0) {
-                this._discoveryLabel.text = 'No phones found on network.';
-                const retryBtn = new St.Button({
-                    label: 'Retry Scan',
-                    style_class: 'button',
-                    style: 'margin-top: 5px; padding: 5px;',
-                });
-                retryBtn.connect('clicked', () => {
-                    this._discoveryLabel.text = 'Scanning...';
-                    this._startDiscovery();
-                });
-                this._deviceList.add_child(retryBtn);
-            } else {
-                this._discoveryLabel.text = 'Discovered phones:';
-                devices.forEach(ip => {
-                    const btn = new St.Button({
-                        label: `Phone at ${ip}`,
-                        style_class: 'button',
-                        style: 'text-align: left; padding: 10px; background-color: #333; margin-bottom: 2px;',
-                        x_expand: true,
-                    });
-                    btn.connect('clicked', () => this._onPairRequested(ip));
-                    this._deviceList.add_child(btn);
-                });
-            }
-        } catch (e) {
-            this._discoveryLabel.text = `Scan error: ${e.message}`;
+            console.log(`PairingDialog: PC IP is ${pcIp}, loading QR from ${qrUrl}`);
+
+            const message = Soup.Message.new('GET', qrUrl);
+            SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+                try {
+                    const bytes = session.send_and_read_finish(res);
+                    if (message.status_code === 200) {
+                        const stream = Gio.MemoryInputStream.new_from_bytes(bytes);
+                        const gicon = Gio.BytesIcon.new(bytes);
+                        this._qrImage.gicon = gicon;
+                    } else {
+                        this._discoveryLabel.text = 'Failed to load QR code. check internet.';
+                    }
+                } catch (e) {
+                    this._discoveryLabel.text = `QR Error: ${e.message}`;
+                }
+            });
+        } else {
+            this._discoveryLabel.text = 'Could not start pairing server.';
         }
     }
 
@@ -145,6 +147,12 @@ export const PairingDialog = GObject.registerClass({
                 try {
                     const bytes = session.send_and_read_finish(res);
                     if (message.status_code === 200) {
+                        const decoder = new TextDecoder('utf-8');
+                        const text = decoder.decode(bytes.toArray());
+                        const response = JSON.parse(text);
+                        this._pendingRestToken = response.restToken;
+                        this._pendingWsToken = response.wsToken;
+
                         this._statusLabel.text = 'Pending... Accept on your phone.';
                         this._startPolling(ip);
                     } else {
@@ -195,7 +203,7 @@ export const PairingDialog = GObject.registerClass({
                             this._pollTimerId = null;
                         }
                         this._statusLabel.text = 'Successfully paired!';
-                        if (this._callback) this._callback(ip);
+                        if (this._callback) this._callback(ip, this._pendingRestToken, this._pendingWsToken);
                         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                             this.close();
                             return GLib.SOURCE_REMOVE;
@@ -216,6 +224,9 @@ export const PairingDialog = GObject.registerClass({
         if (this._pollTimerId) {
             GLib.Source.remove(this._pollTimerId);
             this._pollTimerId = null;
+        }
+        if (this._pairingServer) {
+            this._pairingServer.stop();
         }
         super.close();
     }
