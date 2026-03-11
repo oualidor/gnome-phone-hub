@@ -30,16 +30,16 @@ export const PhoneHubIndicator = GObject.registerClass({
         this._toggle._topBarRef = this._topBarMenu; // Inject reference so toggle can drive it
         Main.panel.addToStatusArea('PhoneHubTopBar', this._topBarMenu);
 
-        this._timerId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            5000,
-            () => {
-                if (this._toggle.checked) {
-                    this._toggle.refreshDevices();
-                }
-                return true;
-            }
-        );
+        // this._timerId = GLib.timeout_add(
+        //     GLib.PRIORITY_DEFAULT,
+        //     5000,
+        //     () => {
+        //         if (this._toggle.checked) {
+        //             this._toggle.refreshDevices();
+        //         }
+        //         return true;
+        //     }
+        // );
     }
 
     destroy() {

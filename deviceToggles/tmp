@@ -1,0 +1,256 @@
+
+
+
+
+        // /* ---------- Screen Stream (no scrcpy needed) ---------- */
+        // let streamToggle = new PopupMenu.PopupSwitchMenuItem('Screen Stream', ScreenStream.isStreaming());
+        // streamToggle.insert_child_at_index(new St.Icon({
+        //     icon_name: 'video-display-symbolic',
+        //     style_class: 'popup-menu-icon',
+        // }), 0);
+
+        // if (!isPaired) {
+        //     streamToggle.sensitive = false;
+        //     streamToggle.label.text += ' (Not Paired)';
+        // }
+
+        // streamToggle.connect('toggled', (item, state) => {
+        //     const s = Settings.loadSettings();
+        //     const ip = s.phoneIp || (isNetwork ? deviceId : null);
+        //     if (!ip) {
+        //         Main.notify('Phone HUB', 'No IP address for streaming.');
+        //         streamToggle.setToggleState(false);
+        //         return;
+        //     }
+        //     if (state) {
+        //         const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+        //         ScreenStream.start(ip, s.wsToken, extPath);
+        //     } else {
+        //         ScreenStream.stop();
+        //     }
+        // });
+
+
+        /* ---------- SMS ---------- */
+        // let smsItem = new PopupMenu.PopupMenuItem('View SMS Messages');
+        // smsItem.insert_child_at_index(new St.Icon({
+        //     icon_name: 'chat-message-new-symbolic',
+        //     style_class: 'popup-menu-icon',
+        // }), 0);
+
+        // if (!isPaired) {
+        //     smsItem.sensitive = false;
+        //     smsItem.label.text += ' (Not Paired)';
+        // }
+
+        // smsItem.connect('activate', async () => {
+        //     let ip = isNetwork ? deviceId : null;
+        //     if (!isNetwork) {
+        //         const ips = await Adb.getDeviceIps(deviceId);
+        //         // Prioritize LAN IPs (192.168.x.x, 10.x.x.x, 172.16.x.x)
+        //         ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+        //     }
+
+        //     const extensionPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+        //     const scriptPath = `${extensionPath}/smsWindow.js`;
+
+        //     const s = Settings.loadSettings();
+        //     let argv = ['gjs', '-m', scriptPath];
+        //     if (ip) {
+        //         argv.push('--host', ip);
+        //     }
+        //     if (s.restToken) {
+        //         argv.push('--token', s.restToken);
+        //     }
+
+        //     try {
+        //         let proc = Gio.Subprocess.new(
+        //             argv,
+        //             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+        //         );
+
+        //         const stdoutReader = new Gio.DataInputStream({
+        //             base_stream: proc.get_stdout_pipe(),
+        //             close_base_stream: true
+        //         });
+        //         const readStdout = () => {
+        //             stdoutReader.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+        //                 try {
+        //                     const [line] = stream.read_line_finish_utf8(res);
+        //                     if (line !== null) {
+        //                         console.log(`SMS Window STDOUT: ${line}`);
+        //                         readStdout();
+        //                     }
+        //                 } catch (e) { }
+        //             });
+        //         };
+        //         readStdout();
+
+        //         const stderrReader = new Gio.DataInputStream({
+        //             base_stream: proc.get_stderr_pipe(),
+        //             close_base_stream: true
+        //         });
+        //         const readStderr = () => {
+        //             stderrReader.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+        //                 try {
+        //                     const [line] = stream.read_line_finish_utf8(res);
+        //                     if (line !== null) {
+        //                         console.error(`SMS Window STDERR: ${line}`);
+        //                         readStderr();
+        //                     }
+        //                 } catch (e) { }
+        //             });
+        //         };
+        //         readStderr();
+        //     } catch (e) {
+        //         console.error(`Failed to launch SMS Window: ${e.message}`);
+        //     }
+        // });
+
+
+        /* ---------- Contacts & Calling ---------- */
+        // let contactItem = new PopupMenu.PopupMenuItem('Contacts & Calling');
+        // contactItem.insert_child_at_index(new St.Icon({
+        //     icon_name: 'contact-new-symbolic',
+        //     style_class: 'popup-menu-icon',
+        // }), 0);
+
+        // if (!isPaired) {
+        //     contactItem.sensitive = false;
+        //     contactItem.label.text += ' (Not Paired)';
+        // }
+
+        // contactItem.connect('activate', async () => {
+        //     let ip = isNetwork ? deviceId : null;
+        //     if (!isNetwork) {
+        //         const ips = await Adb.getDeviceIps(deviceId);
+        //         ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+        //     }
+
+        //     const extensionPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+        //     const scriptPath = `${extensionPath}/contactsWindow.js`;
+
+        //     const s = Settings.loadSettings();
+        //     let argv = ['gjs', '-m', scriptPath];
+        //     if (ip) {
+        //         argv.push('--host', ip);
+        //     }
+        //     if (s.restToken) {
+        //         argv.push('--token', s.restToken);
+        //     }
+
+        //     try {
+        //         let proc = Gio.Subprocess.new(
+        //             argv,
+        //             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+        //         );
+
+        //         const stdoutReader = new Gio.DataInputStream({
+        //             base_stream: proc.get_stdout_pipe(),
+        //             close_base_stream: true
+        //         });
+        //         const readStdout = () => {
+        //             stdoutReader.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+        //                 try {
+        //                     const [line] = stream.read_line_finish_utf8(res);
+        //                     if (line !== null) {
+        //                         console.log(`Contacts Window STDOUT: ${line}`);
+        //                         readStdout();
+        //                     }
+        //                 } catch (e) { }
+        //             });
+        //         };
+        //         readStdout();
+
+        //         const stderrReader = new Gio.DataInputStream({
+        //             base_stream: proc.get_stderr_pipe(),
+        //             close_base_stream: true
+        //         });
+        //         const readStderr = () => {
+        //             stderrReader.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+        //                 try {
+        //                     const [line] = stream.read_line_finish_utf8(res);
+        //                     if (line !== null) {
+        //                         console.error(`Contacts Window STDERR: ${line}`);
+        //                         readStderr();
+        //                     }
+        //                 } catch (e) { }
+        //             });
+        //         };
+        //         readStderr();
+        //     } catch (e) {
+        //         console.error(`Phone HUB: Failed to launch contacts window: ${e.message}`);
+        //     }
+        // });
+        // this._deviceSection.addMenuItem(contactItem);
+
+
+
+        // /* ---------- Launch App on PC ---------- */
+        // let launchAppItem = new PopupMenu.PopupMenuItem('Launch App on PC');
+        // launchAppItem.insert_child_at_index(new St.Icon({
+        //     icon_name: 'application-x-executable-symbolic',
+        //     style_class: 'popup-menu-icon',
+        // }), 0);
+
+        // if (!isPaired) {
+        //     launchAppItem.sensitive = false;
+        //     launchAppItem.label.text += ' (Not Paired)';
+        // }
+
+        // launchAppItem.connect('activate', async () => {
+        //     if (!deviceId) {
+        //         Main.notify('Phone HUB', 'Device not found via ADB.');
+        //         return;
+        //     }
+
+        //     try {
+        //         Main.notify('Phone HUB', 'Fetching apps from phone...');
+        //         const apps = await Adb.getInstalledApps(deviceId);
+        //         console.log(`Phone HUB: Fetched ${apps.length} apps from ${deviceId}`);
+
+        //         const appsJson = JSON.stringify(apps);
+        //         const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+        //         const scrcpyPath = Scrcpy.getScrcpyPath();
+        //         console.log(`Phone HUB: Launching appLauncherWindow.js from ${extPath} with scrcpy=${scrcpyPath}`);
+
+        //         const display = GLib.getenv('DISPLAY');
+        //         const wayland = GLib.getenv('WAYLAND_DISPLAY');
+
+        //         const proc = Gio.Subprocess.new(
+        //             ['gjs', '-m', `${extPath}/appLauncherWindow.js`,
+        //                 '--host', deviceId,
+        //                 '--apps', appsJson,
+        //                 '--scrcpy', scrcpyPath],
+        //             Gio.SubprocessFlags.STDERR_PIPE
+        //         );
+
+        //         console.log(`Phone HUB: Environment check - DISPLAY=${display}, WAYLAND_DISPLAY=${wayland}`);
+
+        //         const stderrStream = new Gio.DataInputStream({
+        //             base_stream: proc.get_stderr_pipe(),
+        //             close_base_stream: true
+        //         });
+
+        //         const readError = () => {
+        //             stderrStream.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+        //                 try {
+        //                     const [line] = stream.read_line_finish_utf8(res);
+        //                     if (line !== null) {
+        //                         console.error(`Phone HUB (Launcher Error): ${line}`);
+        //                         if (line.includes('Error') || line.includes('Failed')) {
+        //                             Main.notify('Phone HUB Error', line.substring(0, 100));
+        //                         }
+        //                         readError();
+        //                     }
+        //                 } catch (e) { }
+        //             });
+        //         };
+
+        //         readError();
+        //         this.menu.close();
+        //     } catch (e) {
+        //         console.error(e);
+        //         Main.notify('Phone HUB', `Failed to open app launcher: ${e.message}`);
+        //     }
+        // });

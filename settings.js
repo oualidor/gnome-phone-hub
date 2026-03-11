@@ -36,7 +36,7 @@ export function loadSettings() {
             if (!data.sshfsPort) data.sshfsPort = '2222';
             if (!data.sshfsPath) data.sshfsPath = '/sdcard';
             if (!data.sshfsUser) data.sshfsUser = 'phonehub';
-            if (!data.sshfsMountPoint) data.sshfsMountPoint = GLib.get_home_dir() + '/PhoneHub';
+            if (!data.sshfsMountPoint) data.sshfsMountPoint = GLib.get_home_dir() + '/' + data.deviceName;
             return data;
         }
     } catch (e) {

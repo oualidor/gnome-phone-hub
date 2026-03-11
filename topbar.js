@@ -19,19 +19,64 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
 
         // Add a Phone icon and Label to the top bar
         let hbox = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
+
+        // Row: Icon + Name
+        let leftBox = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
         this._icon = new St.Icon({
             icon_name: 'phone-symbolic',
             style_class: 'system-status-icon',
         });
-
         this._deviceLabel = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
-            style: 'margin-left: 2px; margin-right: 4px;'
+            style: 'margin-left: 2px; margin-right: 6px;'
+        });
+        leftBox.add_child(this._icon);
+        leftBox.add_child(this._deviceLabel);
+
+        // Row: Status Icons (mirroring the menu's iconsBox)
+        let rightBox = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
+
+        this._topNetworkTypeLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 0.8em; margin-right: 4px; font-weight: bold; opacity: 1;'
         });
 
-        hbox.add_child(this._icon);
-        hbox.add_child(this._deviceLabel);
+        this._topBluetoothIcon = new St.Icon({
+            icon_name: 'bluetooth-active-symbolic',
+            style_class: 'system-status-icon',
+            opacity: 120,
+            style: "font-size: 0.9em; margin-right: 4px;"
+        });
+
+        this._topDataIcon = new St.Icon({
+            icon_name: 'network-cellular-offline-symbolic',
+            style_class: 'system-status-icon',
+            opacity: 120,
+            style: "font-size: 0.9em; margin-right: 4px;"
+        });
+
+        this._topBatteryLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 0.9em; margin-right: 0px; opacity: 0.8;'
+        });
+
+        this._topBatteryIcon = new St.Icon({
+            icon_name: 'battery-missing-symbolic',
+            style_class: 'system-status-icon',
+            opacity: 180
+        });
+
+        rightBox.add_child(this._topNetworkTypeLabel);
+        rightBox.add_child(this._topBluetoothIcon);
+        rightBox.add_child(this._topDataIcon);
+        rightBox.add_child(this._topBatteryLabel);
+        // rightBox.add_child(this._topBatteryIcon);
+
+        hbox.add_child(leftBox);
+        hbox.add_child(rightBox);
         this.add_child(hbox);
 
         // Hide by default initially
@@ -52,6 +97,129 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         }
     }
 
+    getDeviceheaderMenu(label, isPaired) {
+        // Main Header Container (Vertical)
+        let headerBox = new St.BoxLayout({
+            vertical: true,
+            x_align: Clutter.ActorAlign.FILL,
+            x_expand: true,
+            style: 'padding: 4px; min-width: 300px;'
+        });
+
+        // Row 2: Status & Icons
+        let statusRow = new St.BoxLayout({
+            vertical: false,
+            style: 'margin-top: 0px; margin-left: 0px;'
+        });
+
+        this._menuOperatorLabel = new St.Label({
+            text: isPaired ? 'Mobile Network' : '',
+            style: 'font-size: 1em; font-weight: bold; opacity: 1; color: white',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true
+        });
+        statusRow.add_child(this._menuOperatorLabel);
+
+        // Status Icons Box (Right)
+        let iconsBox = new St.BoxLayout({
+            vertical: false,
+            style_class: 'battery-container',
+            visible: isPaired
+        });
+
+        this._menuNetworkTypeLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white'
+        });
+        iconsBox.add_child(this._menuNetworkTypeLabel);
+
+        this._menuBluetoothIcon = new St.Icon({
+            icon_name: 'bluetooth-active-symbolic',
+            style_class: 'popup-menu-icon',
+            opacity: 120,
+            style: "color: white; font-size: 0.80em; margin-right: 8px;"
+        });
+        iconsBox.add_child(this._menuBluetoothIcon);
+
+        this._menuDataIcon = new St.Icon({
+            icon_name: 'network-cellular-offline-symbolic',
+            style_class: 'popup-menu-icon',
+            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white',
+        });
+        iconsBox.add_child(this._menuDataIcon);
+
+        this._menuBatteryLabel = new St.Label({
+            text: '--%',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 0.85em; margin-right: 4px; opacity: 0.8; color: white;'
+        });
+        iconsBox.add_child(this._menuBatteryLabel);
+
+        statusRow.add_child(iconsBox);
+        headerBox.add_child(statusRow);
+
+        let headerItem = new PopupMenu.PopupMenuItem('');
+        headerItem.add_child(headerBox);
+        headerItem.sensitive = false;
+        return headerItem;
+    }
+
+    getFindMyPhoneItem(isPaired, deviceId, isNetwork) {
+        let findPhoneItem = new PopupMenu.PopupMenuItem('Find My Phone');
+        const icon = new St.Icon({
+            icon_name: 'audio-volume-high-symbolic',
+            style_class: 'popup-menu-icon',
+        });
+        findPhoneItem.insert_child_at_index(icon, 0);
+
+        if (!isPaired) {
+            findPhoneItem.sensitive = false;
+        }
+
+        let isRinging = false;
+        findPhoneItem.connect('activate', async () => {
+            const s = Settings.loadSettings();
+            let ip = s.phoneIp;
+            if (!ip) {
+                ip = isNetwork ? deviceId : null;
+                if (!isNetwork) {
+                    const ips = await Adb.getDeviceIps(deviceId);
+                    ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                }
+            }
+
+            if (!ip) return;
+
+            const token = s.restToken;
+            const action = isRinging ? 'stop' : 'start';
+
+            try {
+                const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
+                const session = new Soup.Session();
+                session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+                    try {
+                        session.send_and_read_finish(res);
+                        isRinging = !isRinging;
+                        if (isRinging) {
+                            findPhoneItem.label.text = 'Stop Ringing Phone';
+                            icon.icon_name = 'audio-volume-muted-symbolic';
+                        } else {
+                            findPhoneItem.label.text = 'Find My Phone';
+                            icon.icon_name = 'audio-volume-high-symbolic';
+                        }
+                    } catch (e) {
+                        console.error(`Find My Phone Error: ${e.message}`);
+                    }
+                });
+            } catch (e) {
+                console.error(`Find My Phone Error: ${e.message}`);
+            }
+        });
+
+        return findPhoneItem;
+    }
+
     async rebuildMenu(deviceId, deviceName, isPaired, isNetwork) {
         this.menu.removeAll();
         if (!isPaired) {
@@ -68,14 +236,12 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         const hasScrcpy = Scrcpy.checkScrcpy();
         const settings = Settings.loadSettings();
 
-        // 1. Header label
-        let titleItem = new PopupMenu.PopupMenuItem(`${deviceName}`);
-        titleItem.sensitive = false;
-        titleItem.label.add_style_class_name('bold');
-        this.menu.addMenuItem(titleItem);
+        /* ---------- Header ---------- */
+        let headerItem = this.getDeviceheaderMenu(deviceName, isPaired);
+        this.menu.addMenuItem(headerItem);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // 1.5 SSHFS Mount Toggle
+        /* ---------- SSHFS Mount ---------- */
         const mountPoint = settings.sshfsMountPoint;
         this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint));
         let mountToggle = this._mountToggle;
@@ -122,79 +288,7 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         });
         this.menu.addMenuItem(mountToggle);
 
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        // 2. Camera Toggle
-        let cameraToggle = new PopupMenu.PopupSwitchMenuItem('Use as webcam', false);
-        cameraToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'camera-video-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        if (!hasScrcpy || isNetwork) {
-            cameraToggle.sensitive = false;
-            if (!hasScrcpy) cameraToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) cameraToggle.label.text += ' (USB only)';
-        }
-        cameraToggle.connect('toggled', (item, state) => {
-            if (this._toggleRef) {
-                if (state) Scrcpy.startCamera(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
-                else this._toggleRef._stopCamera(deviceId);
-            }
-        });
-
-        // 3. Mirror Toggle
-        let mirrorToggle = new PopupMenu.PopupSwitchMenuItem('Mirror', false);
-        mirrorToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'video-display-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        if (!hasScrcpy || isNetwork) {
-            mirrorToggle.sensitive = false;
-            if (!hasScrcpy) mirrorToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) mirrorToggle.label.text += ' (USB only)';
-        }
-        mirrorToggle.connect('toggled', (item, state) => {
-            if (this._toggleRef) {
-                if (state) Scrcpy.startMirroring(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
-                else this._toggleRef._stopMirror(deviceId);
-            }
-        });
-
-        // 4. SMS Item
-        let smsItem = new PopupMenu.PopupMenuItem('View SMS Messages');
-        smsItem.insert_child_at_index(new St.Icon({
-            icon_name: 'chat-message-new-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        smsItem.connect('activate', async () => {
-            if (!this._toggleRef) return;
-            try {
-                const s = Settings.loadSettings();
-                let ip = s.phoneIp;
-                if (!ip) {
-                    ip = isNetwork ? deviceId : null;
-                    if (!isNetwork) {
-                        const ips = await Adb.getDeviceIps(deviceId);
-                        ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-                    }
-                }
-                const extensionPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
-                const scriptPath = `${extensionPath}/smsWindow.js`;
-
-                let argv = ['gjs', '-m', scriptPath];
-                if (ip) argv.push('--host', ip);
-                if (s.restToken) argv.push('--token', s.restToken);
-
-                import('gi://Gio').then(GioMod => {
-                    const Gio = GioMod.default;
-                    Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
-                });
-            } catch (e) {
-                console.error(e);
-            }
-        });
-
-        // 5. Call Notifications
+        /* ---------- Call Notifications ---------- */
         let callNotifToggle = new PopupMenu.PopupSwitchMenuItem(
             'Call Notifications',
             settings.enableCallNotifications !== false
@@ -212,8 +306,9 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
                 else this._toggleRef._stopCallPolling();
             }
         });
+        this.menu.addMenuItem(callNotifToggle);
 
-        // 6. Sync Notifications
+        /* ---------- Sync Notifications ---------- */
         let phoneNotifToggle = new PopupMenu.PopupSwitchMenuItem(
             'Sync Notifications',
             settings.enablePhoneNotifications !== false
@@ -234,30 +329,113 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
                 }
             }
         });
+        this.menu.addMenuItem(phoneNotifToggle);
 
-        // 7. Unpair Action
+        /* ---------- Find My Phone ---------- */
+        let findPhoneItem = this.getFindMyPhoneItem(isPaired, deviceId, isNetwork);
+        this.menu.addMenuItem(findPhoneItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        /* ---------- Camera Toggle ---------- */
+        let cameraToggle = new PopupMenu.PopupSwitchMenuItem('Use as webcam', false);
+        cameraToggle.insert_child_at_index(new St.Icon({
+            icon_name: 'camera-video-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+        if (!hasScrcpy || isNetwork) {
+            cameraToggle.sensitive = false;
+            if (!hasScrcpy) cameraToggle.label.text += ' (scrcpy missing)';
+            else if (isNetwork) cameraToggle.label.text += ' (USB only)';
+        }
+        cameraToggle.connect('toggled', (item, state) => {
+            if (this._toggleRef) {
+                if (state) Scrcpy.startCamera(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
+                else this._toggleRef._stopCamera(deviceId);
+            }
+        });
+        this.menu.addMenuItem(cameraToggle);
+
+        /* ---------- Mirror Toggle ---------- */
+        let mirrorToggle = new PopupMenu.PopupSwitchMenuItem('Mirror Display', false);
+        mirrorToggle.insert_child_at_index(new St.Icon({
+            icon_name: 'video-display-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+        if (!hasScrcpy || isNetwork) {
+            mirrorToggle.sensitive = false;
+            if (!hasScrcpy) mirrorToggle.label.text += ' (scrcpy missing)';
+            else if (isNetwork) mirrorToggle.label.text += ' (USB only)';
+        }
+        mirrorToggle.connect('toggled', (item, state) => {
+            if (this._toggleRef) {
+                if (state) Scrcpy.startMirroring(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
+                else this._toggleRef._stopMirror(deviceId);
+            }
+        });
+        this.menu.addMenuItem(mirrorToggle);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        /* ---------- Unpair Action ---------- */
         let unpairItem = new PopupMenu.PopupMenuItem('Unpair Device');
         unpairItem.insert_child_at_index(new St.Icon({
             icon_name: 'user-trash-symbolic',
             style_class: 'popup-menu-icon',
         }), 0);
+        unpairItem.style = 'color: #ed333b;';
         unpairItem.connect('activate', () => {
             if (this._toggleRef) this._toggleRef._forgetDevice();
         });
-
-        // this.menu.addMenuItem(smsItem);
-        this.menu.addMenuItem(callNotifToggle);
-        this.menu.addMenuItem(phoneNotifToggle);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this.menu.addMenuItem(cameraToggle);
-        this.menu.addMenuItem(mirrorToggle);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addMenuItem(unpairItem);
     }
 
     syncMountState(state) {
         if (this._mountToggle && this._mountToggle.state !== state) {
             this._mountToggle.setToggleState(state);
+        }
+    }
+
+    updateBattery(level, iconName) {
+        const text = `${level}%`;
+        if (this._topBatteryLabel) this._topBatteryLabel.text = text;
+        if (this._topBatteryIcon) this._topBatteryIcon.icon_name = iconName;
+        if (this._menuBatteryLabel) this._menuBatteryLabel.text = text;
+        if (this._menuBatteryIcon) this._menuBatteryIcon.icon_name = iconName;
+    }
+
+    updateDataStatus(status, iconName, operator, networkType) {
+        if (this._topDataIcon) {
+            this._topDataIcon.icon_name = iconName;
+            this._topDataIcon.opacity = status === 'on' ? 255 : 120;
+        }
+        if (this._menuDataIcon) {
+            this._menuDataIcon.icon_name = iconName;
+            this._menuDataIcon.opacity = status === 'on' ? 255 : 120;
+        }
+        if (this._menuOperatorLabel) {
+            this._menuOperatorLabel.text = operator || (status === 'on' ? 'Mobile Network' : 'Disconnected');
+        }
+        if (this._menuNetworkTypeLabel) {
+            this._menuNetworkTypeLabel.text = status === 'on' ? networkType : '';
+        }
+        if (this._topNetworkTypeLabel) {
+            this._topNetworkTypeLabel.text = status === 'on' ? networkType : '';
+        }
+    }
+
+    updateBluetoothStatus(status) {
+        const iconName = status === 'on'
+            ? 'bluetooth-active-symbolic'
+            : 'bluetooth-disabled-symbolic';
+
+        if (this._menuBluetoothIcon) {
+            this._menuBluetoothIcon.icon_name = iconName;
+            this._menuBluetoothIcon.opacity = status === 'on' ? 255 : 120;
+        }
+        if (this._topBluetoothIcon) {
+            this._topBluetoothIcon.icon_name = iconName;
+            this._topBluetoothIcon.opacity = status === 'on' ? 255 : 120;
         }
     }
 });

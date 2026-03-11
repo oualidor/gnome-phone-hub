@@ -39,7 +39,6 @@ export async function mountDevice(ip, settings) {
     const mountPoint = settings.sshfsMountPoint;
     const port = settings.sshfsPort || '2222';
     const user = settings.sshfsUser || 'phonehub';
-    const remotePath = settings.sshfsPath || '/';
     const password = settings.restToken;
 
     if (!password) {

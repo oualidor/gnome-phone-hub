@@ -1,6 +1,6 @@
 {
     "name": "Phone HUB",
-    "description": "ADB and Scrcpy based Phone HUB lets lets you connect your adnroid phone to your GNOME desktop, for now you can monitor your phone's battery life,  use your phone as a webcam or mirror its screen.",
+    "description": "Integrate your android phone in your Debian/Ubuntu gnome ecosystem, Mount device storage on PC, Get your notifications on PC, Manage your calls, Use your phone as webcome,  Mirror your phone ",
     "uuid": "phone-hub@oualidkhial",
     "shell-version": [
         "45",
@@ -12,5 +12,6 @@
     ],
     "url": "https://github.com/oualidor/gnome-phone-hub",
     "gettext-domain": "phone-hub",
-    "version": 1
+    "version": 1,
+    "icon": "icon.png"
 }

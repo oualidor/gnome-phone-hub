@@ -113,3 +113,38 @@ export async function getDeviceIps(deviceId) {
     }
     return ips;
 }
+/**
+ * Get list of installed launchable apps
+ * @param {string} deviceId 
+ * @returns {Promise<{name: string, package: string}[]>}
+ */
+export async function getInstalledApps(deviceId) {
+    const adbPath = getAdbPath() || 'adb';
+    // This command gets all launchable activities and their labels
+    // It's a bit complex but reliable: cmd package list packages -3 (third party)
+    // or just list all packages. 
+    // To get the labels, we can use: pm list packages -e
+    // Actually, getting labels via ADB is slow if we do it one by one.
+    // A better way is: 'shell', 'pm', 'query-activities', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER'
+    // but query-activities doesn't exist on all Android versions.
+
+    // Simplest reliable way: list all packages, then we'll show package names if we can't get labels easily.
+    // However, users prefer names.
+    let output = await runCommand([
+        adbPath,
+        '-s', deviceId,
+        'shell',
+        'pm', 'list', 'packages', '-3'
+    ]);
+
+    let packages = output.split('\n')
+        .filter(line => line.trim().startsWith('package:'))
+        .map(line => line.replace('package:', '').trim())
+        .filter(p => p.length > 0)
+        .sort();
+
+    return packages.map(p => ({
+        name: p.split('.').pop().charAt(0).toUpperCase() + p.split('.').pop().slice(1),
+        package: p
+    }));
+}

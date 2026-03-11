@@ -140,3 +140,57 @@ export function startNotificationListener(deviceId, procs) {
         console.error(`Notification Listener Error: ${e.message}`);
     }
 }
+/**
+ * Start a specific app on a virtual display using scrcpy
+ * @param {string} deviceId 
+ * @param {string} packageName 
+ * @param {number} width 
+ * @param {number} height 
+ * @param {Object} procs - Object to store reference to the process
+ */
+export function startApp(deviceId, packageName, width, height, procs) {
+    const scrcpyPath = getScrcpyPath();
+    if (!scrcpyPath) {
+        Main.notify("Phone HUB", "scrcpy not found. Please install it to use this feature.");
+        return;
+    }
+
+    try {
+        const args = [
+            scrcpyPath,
+            '-s', deviceId,
+            `--new-display=${width}x${height}`,
+            `--start-app=${packageName}`
+        ];
+        console.log(`Phone HUB: Running scrcpy command: ${args.join(' ')}`);
+        Main.notify('Phone HUB', `Starting scrcpy for ${packageName}...`);
+
+        let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDERR_PIPE);
+
+        const stderrStream = new Gio.DataInputStream({
+            base_stream: proc.get_stderr_pipe(),
+            close_base_stream: true
+        });
+
+        const readError = () => {
+            stderrStream.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+                try {
+                    const [line] = stream.read_line_finish_utf8(res);
+                    if (line !== null) {
+                        console.error(`Phone HUB (Scrcpy Error): ${line}`);
+                        readError();
+                    }
+                } catch (e) { }
+            });
+        };
+        readError();
+
+        procs.app = proc;
+
+        proc.wait_async(null, () => {
+            procs.app = null;
+        });
+    } catch (e) {
+        console.error(`App Launch Error: ${e.message}`);
+    }
+}
