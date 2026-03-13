@@ -50,4 +50,28 @@ To use adb and scrcpy, you need to enable USB debugging on your Android device.
 3. Trust Connection: Connect via USB and select "Always allow from this computer" when prompted.
 
 
+
+## Planned additionl features (Marked == devlopment in progress by maintainers)
+
+- [x] Bleutouth pairing for cross network comunitcation 
+- [x] Call audio device swicthign from current call window
+- [x] Calls history, contact, and dialler (similar to goodle default) 
+- [ ] Open android apps on PC (No mirroring)
+
+
+##  🤝 Contributing
+
+Contributions are welcome and greatly appreciated!
+
+If you’d like to improve this project, feel free to:
+
+- 🐛 Report bugs
+
+- 💡 Suggest new features
+
+- 🔧 Submit code improvements
+
+- 📖 Improve documentation
+
+
 Author: Oualid Khial
