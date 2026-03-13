@@ -6,8 +6,7 @@ import GLib from 'gi://GLib';
  * @returns {string|null}
  */
 export function getAdbPath() {
-    return '/usr/bin/adb'
-    // return GLib.find_program_in_path('adb');
+    return GLib.find_program_in_path('adb');
 }
 
 /**
@@ -147,4 +146,28 @@ export async function getInstalledApps(deviceId) {
         name: p.split('.').pop().charAt(0).toUpperCase() + p.split('.').pop().slice(1),
         package: p
     }));
+}
+
+/**
+ * Enable TCP/IP mode on a device (via USB)
+ * @param {string} deviceId 
+ * @param {number} port 
+ * @returns {Promise<boolean>}
+ */
+export async function enableTcpip(deviceId, port = 5555) {
+    const adbPath = getAdbPath() || 'adb';
+    let output = await runCommand([adbPath, '-s', deviceId, 'tcpip', port.toString()]);
+    return output.toLowerCase().includes('restarting in tcp mode');
+}
+
+/**
+ * Connect to a device via IP
+ * @param {string} ip 
+ * @param {number} port 
+ * @returns {Promise<boolean>}
+ */
+export async function connectIp(ip, port = 5555) {
+    const adbPath = getAdbPath() || 'adb';
+    let output = await runCommand([adbPath, 'connect', `${ip}:${port}`]);
+    return output.toLowerCase().includes('connected to');
 }

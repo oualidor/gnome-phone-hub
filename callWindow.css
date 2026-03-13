@@ -1,0 +1,12 @@
+.callWindow {
+    background-color: rgba(43, 121, 247, 0.8);
+}
+
+label {
+    font-size: 1em;
+    color: white;
+}
+
+.avatar {
+    color: white;
+}

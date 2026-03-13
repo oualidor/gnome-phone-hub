@@ -5,12 +5,18 @@
  * CLI args: --host <ip> --token <rest_token> --number <caller_id>
  */
 
+const Gdk = imports.gi.Gdk;
+
 import Gtk from 'gi://Gtk?version=4.0';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
 try {
+    const USER_DATA_DIR = GLib.get_user_data_dir()
+
+    let cssFile = Gio.File.new_for_path(USER_DATA_DIR + '/gnome-shell/extensions/phone-hub@oualidkhial/callWindow.css');
+    console.error("cssFile", cssFile);
     let host = '127.0.0.1';
     let token = '';
     let number = 'Unknown Caller';
@@ -31,87 +37,105 @@ try {
     const session = new Soup.Session();
 
     app.connect('activate', () => {
+
+        let provider = new Gtk.CssProvider();
+        provider.load_from_file(cssFile);
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+
         const window = new Gtk.ApplicationWindow({
             application: app,
             title: statusstr === 'offhook' ? 'Ongoing Call' : 'Incoming Call',
-            default_width: 400,
-            // default_height: 200,
+            default_width: 350,
             resizable: false,
-            decorated: false, // Make it look like a floating widget
+            decorated: false,
         });
+        window.add_css_class('callWindow');
 
+        // The main container is now vertical to hold the profile row + buttons
         const mainBox = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
-            margin_top: 32,
-            margin_bottom: 32,
-            margin_start: 32,
-            margin_end: 32,
-            halign: Gtk.Align.CENTER,
-            valign: Gtk.Align.CENTER,
+            spacing: 12,
+            margin_top: 12,
+            margin_bottom: 12,
+            margin_start: 24,
+            margin_end: 12,
+        });
+        mainBox.add_css_class('mainBox');
+
+        // --- PROFILE ROW (Avatar + Text) ---
+        const profileRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 16,
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.CENTER
         });
 
-        // Avatar
+
+        // Avatar (Left)
         const avatarImage = new Gtk.Image({
             icon_name: 'avatar-default-symbolic',
-            pixel_size: 34,
-            halign: Gtk.Align.CENTER,
-            margin_bottom: 8
+            pixel_size: 48, // Slightly larger for better balance
+            valign: Gtk.Align.CENTER,
         });
         avatarImage.add_css_class('avatar');
-        mainBox.append(avatarImage);
+        profileRow.append(avatarImage);
 
-        // Caller ID
+        // Text Container (Vertical Stack)
+        const textStack = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            valign: Gtk.Align.CENTER
+        });
+
+        // Caller Name/Number
         const callerLabel = new Gtk.Label({
             label: number,
-            halign: Gtk.Align.CENTER,
-            wrap: true,
-            justify: Gtk.Justification.CENTER,
+            halign: Gtk.Align.START, // Left align text
+            use_markup: true,
         });
-        callerLabel.add_css_class('title-2');
-        mainBox.append(callerLabel);
+        callerLabel.add_css_class('idLabel');
+        textStack.append(callerLabel);
 
-        // Title/Status
+        // Status Label (Under Name)
         const titleLabel = new Gtk.Label({
-            label: statusstr === 'offhook' ? 'Ongoing Call' : 'Incoming Call',
-            halign: Gtk.Align.CENTER,
+            label: (statusstr === 'offhook' ? 'Ongoing Call' : 'Incoming Call').toUpperCase(),
+            halign: Gtk.Align.START,
         });
-        titleLabel.add_css_class('body');
-        titleLabel.add_css_class('dim-label');
-        mainBox.append(titleLabel);
+        titleLabel.add_css_class('caption'); // Smaller font
+        textStack.append(titleLabel);
 
-        // Buttons
+        profileRow.append(textStack);
+        mainBox.append(profileRow);
+
+        // --- BUTTONS ---
         const btnBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 48,
-            halign: Gtk.Align.CENTER,
-            margin_top: 24,
+            spacing: 24,
+            halign: Gtk.Align.END, // Moves buttons to bottom right for a modern look
+            margin_top: 12,
         });
 
         // Decline Button (Red)
         const declineBtn = new Gtk.Button({
             icon_name: 'call-stop-symbolic',
-            has_frame: true,
         });
-        declineBtn.set_size_request(56, 56);
+        declineBtn.set_size_request(48, 48);
         declineBtn.add_css_class('circular');
         declineBtn.add_css_class('destructive-action');
-        declineBtn.add_css_class('osd');
         declineBtn.connect('clicked', () => {
             sendCallAction('decline_call');
         });
         btnBox.append(declineBtn);
 
-        // Accept Button (Green) - only for incoming calls
+        // Accept Button (Green)
         if (statusstr === 'ringing') {
             const acceptBtn = new Gtk.Button({
                 icon_name: 'call-start-symbolic',
-                has_frame: true,
             });
-            acceptBtn.set_size_request(56, 56);
+            acceptBtn.set_size_request(48, 48);
             acceptBtn.add_css_class('circular');
             acceptBtn.add_css_class('suggested-action');
-            acceptBtn.add_css_class('osd');
             acceptBtn.connect('clicked', () => {
                 sendCallAction('answer_call');
             });
@@ -120,6 +144,9 @@ try {
 
         mainBox.append(btnBox);
         window.set_child(mainBox);
+
+        window.set_child(mainBox);
+
         window.present();
 
         // Listen for stdin to cleanly close the window from toggle.js
@@ -142,10 +169,13 @@ try {
                                 return GLib.SOURCE_REMOVE;
                             });
                         } else if (text.startsWith('STATUS:')) {
-                            titleLabel.set_text(text.substring(7));
+                            const newStatus = text.substring(7);
+                            titleLabel.set_text(newStatus);
                             readStdin();
                         } else if (text.startsWith('UPDATE:')) {
                             callerLabel.set_text(text.substring(7));
+                            readStdin();
+                        } else if (text.startsWith('JSON_UPDATE:')) {
                             readStdin();
                         } else {
                             readStdin();

@@ -8,8 +8,8 @@ import * as Adb from './adb.js';
  * @returns {string|null}
  */
 export function getScrcpyPath() {
-    return '/opt/scrcpy/scrcpy'
-    // return GLib.find_program_in_path('scrcpy');
+    // return '/opt/scrcpy/scrcpy'
+    return GLib.find_program_in_path('scrcpy');
 }
 
 /**
@@ -19,6 +19,8 @@ export function getScrcpyPath() {
 export function checkScrcpy() {
     return !!getScrcpyPath();
 }
+
+
 
 /**
  * Start camera using scrcpy

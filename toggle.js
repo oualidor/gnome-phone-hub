@@ -14,6 +14,7 @@ import * as Settings from './settings.js';
 import * as Mount from './mount.js';
 import * as ScreenStream from './screenStream.js';
 import { PairingDialog } from './pairingDialog.js';
+import { WebSocketManager } from './webSocketManager.js';
 
 const SoupSession = new Soup.Session({ timeout: 5 });
 
@@ -37,7 +38,7 @@ export const PhoneHubToggle = GObject.registerClass({
         this.menu.addMenuItem(this._permanentSection);
 
 
-        this._scanning = false;
+
 
         // Map<deviceId, {camera: Gio.Subprocess|null, mirror: Gio.Subprocess|null, notifications: Gio.Subprocess|null}>
         this._activeProcesses = new Map();
@@ -56,36 +57,56 @@ export const PhoneHubToggle = GObject.registerClass({
         this._notifiedIds = new Set();
         this._phoneNotificationSource = null;
 
-        // WebSocket state
-        this._wsConnection = null;
-        this._wsReconnectTimer = null;
-        this._wsIp = null;
-        this._isConnected = false;
-        this._isConnecting = false;
-
-        // Reconnection countdown state
-        this._reconnectCountdown = 10;
-        this._reconnectTimerId = null;
-        this._reconnectIp = null;
         const _initSettings = Settings.loadSettings();
         this._lastKnownDeviceName = _initSettings.deviceName || 'Paired Phone';
+        this._notifiedWifiAdbDevices = new Set();
+
+        // WebSocket Manager
+        this._wsManager = new WebSocketManager();
+        this._wsManager.connect('connected', (mgr, ip) => {
+            if (this._topBarRef) this._topBarRef.updateVisibility(true);
+            this._isConnected = true;
+            this._fetchFullStateAndRebuildMenu(ip);
+        });
+
+        this._wsManager.connect('disconnected', () => {
+            this.subtitle = 'Disconnected';
+            this._isConnected = false;
+            if (this._topBarRef) this._topBarRef.updateVisibility(false);
+        });
+
+        this._wsManager.connect('connecting', () => {
+            this.subtitle = 'Connecting...';
+        });
+
+        this._wsManager.connect('message', (mgr, text) => {
+            this._onWebSocketMessage(text);
+        });
+
+        this._wsManager.connect('reconnect-update', (mgr, countdown, ip) => {
+            this._isConnected = false;
+            this._fetchFullStateAndRebuildMenu(ip);
+        });
+
+        this._wsManager.connect('reconnect-cleared', () => {
+            // Rebuild menu? Or just wait for refresh
+        });
+
+
+        this.isScrcpyInstalled = Scrcpy.checkScrcpy();
 
 
         this.connect('notify::checked', () => {
             if (this.checked) {
-                this._scanning = true;
                 this.subtitle = 'Connecting...';
                 this.refreshDevices(true);
             } else {
-                this._scanning = false;
-                this._disconnectWebSocket();
-                this._clearReconnectTimer();
+                this._wsManager.closeConnection();
                 this._notifiedIds.clear();
                 this.stopAllProcesses();
                 this._deviceSection.removeAll();
                 this.subtitle = 'Disabled';
                 this._isConnected = false;
-
 
                 if (this._topBarRef) this._topBarRef.updateVisibility(false);
             }
@@ -100,232 +121,46 @@ export const PhoneHubToggle = GObject.registerClass({
     =================================*/
     async refreshDevices(force = false) {
         if (!this.checked) return true;
-        if (!this._scanning && !force)
-            return true;
 
-
-        this._scanning = false;
         const settings = Settings.loadSettings();
         const pairedIp = settings.phoneIp;
 
-        // No Phone paired
         if (!pairedIp) {
-
             this._updateMenu([], null);
             return true;
         }
 
-        // Phone paired but current webSocket Point to another phone
-        if (this._wsConnection && this._wsIp !== pairedIp) {
-
-            this._disconnectWebSocket();
-        }
-
-
-
-        // this._fetchFullStateAndRebuildMenu(pairedIp);
-
-
-        // Phone paired but no active webSocket connection
-        if (!this._wsConnection) {
-            console.log("Phone HUB: Connecting to WebSocket at " + pairedIp);
-            this._connectWebSocket(pairedIp);
+        if (!this._wsManager.isConnected && !this._wsManager.isConnecting) {
+            this._wsManager.openConnection(pairedIp);
         } else if (force) {
-            this._fetchFullStateAndRebuildMenu(pairedIp); cause
+            this._fetchFullStateAndRebuildMenu(pairedIp);
         }
         return true;
     }
 
-    /* ===============================
-       WebSocket Connection Management
-    =================================*/
-    _connectWebSocket(ip) {
-        console.log("Phone HUB: Connecting to WebSocket ********************************** at " + ip);
-        if (this._wsConnection || this._isConnecting) return;
-        if (!this.checked) return;
-        this._wsIp = ip;
-        this._isConnecting = true;
-        this.subtitle = 'Connecting...';
-
-        const s = Settings.loadSettings();
-        const url = s.wsToken ? `ws://${ip}:8080/ws?token=${s.wsToken}` : `ws://${ip}:8080/ws`;
-        const message = Soup.Message.new('GET', url);
-        const cancellable = new Gio.Cancellable();
-        this._wsCancellable = cancellable;
-
-        // Hard abort after 5 seconds if phone is offline
-        const timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
-            if (!this._wsConnection) {
-                this._isConnecting = false;
-                cancellable.cancel();
-            }
-            return GLib.SOURCE_REMOVE;
-        });
-
-        SoupSession.websocket_connect_async(message, null, null, null, cancellable, (session, res) => {
-            GLib.source_remove(timerId);
-            this._isConnecting = false;
-            try {
-                this._wsConnection = session.websocket_connect_finish(res);
-                console.log(`Phone HUB: WebSocket connected to ${ip}`);
-
-                // Clear any pending reconnection timer on success
-                this._clearReconnectTimer();
-
-
-                this._wsConnection.connect('message', (ws, type, message) => {
-                    this._onWebSocketMessage(type, message);
-                });
-
-                this._wsConnection.connect('closed', (ws) => {
-                    this._onWebSocketClosed(ws);
-                });
-
-                this._isConnected = true;
-                if (this._topBarRef) this._topBarRef.updateVisibility(true);
-
-                // Fetch full menu state immediately upon connection
-                this._fetchFullStateAndRebuildMenu(ip);
-
-            } catch (e) {
-                console.error(`Phone HUB: WebSocket connection failed: ${e.message}`);
-                this._isConnected = false;
-                this._isConnecting = false;
-                this.subtitle = 'Disconnected';
-                this._startReconnectCountdown(ip);
-            }
-        });
-    }
-
-    _disconnectWebSocket() {
-        this._wsIp = null;
-        this._clearReconnectTimer();
-        if (this._wsReconnectTimer) {
-            GLib.source_remove(this._wsReconnectTimer);
-            this._wsReconnectTimer = null;
-        }
-        if (this._wsPingTimer) {
-            GLib.source_remove(this._wsPingTimer);
-            this._wsPingTimer = null;
-        }
-        if (this._wsConnection) {
-            this._wsConnection.close(Soup.WebsocketCloseCode.NORMAL, "User disconnected");
-            this._wsConnection = null;
-        }
-    }
-
-    _onWebSocketClosed(ws) {
-        console.log("Phone HUB: WebSocket closed.");
-
-        if (ws && ws.get_close_code() === Soup.WebsocketCloseCode.POLICY_VIOLATION) {
-            console.log("Phone HUB: Unpaired from phone side detected.");
-            this._forgetDevice();
-            return;
-        }
-
-        if (this._wsPingTimer) {
-            GLib.source_remove(this._wsPingTimer);
-            this._wsPingTimer = null;
-        }
-
-        this._wsConnection = null;
-        this._isConnected = false;
-        this._isConnecting = false;
-        if (this._topBarRef) this._topBarRef.updateVisibility(false);
-        this.subtitle = 'Disconnected';
-
-        this._startReconnectCountdown(this._wsIp || Settings.loadSettings().phoneIp);
-        // this._scheduleWebSocketReconnect();
-    }
-
-    _clearReconnectTimer() {
-        if (this._reconnectTimerId) {
-            if (typeof this._reconnectTimerId === 'number' && this._reconnectTimerId > 0) {
-                GLib.source_remove(this._reconnectTimerId);
-            }
-            this._reconnectTimerId = null;
-        }
-        this._reconnectCountdown = 10;
-    }
-
-    _startReconnectCountdown(ip) {
-        if (!this.checked || !ip) return;
-
-        // If already in a countdown for the same IP, don't reset unless it's a forced call
-        if (this._reconnectTimerId && this._reconnectIp === ip) return;
-
-        this._clearReconnectTimer();
-        this._reconnectIp = ip;
-        this._reconnectCountdown = 10;
-
-        console.log(`Phone HUB: Starting reconnection countdown for ${ip}`);
-
-        // Use a placeholder to prevent recursive _startReconnectCountdown calls
-        // from inside _fetchFullStateAndRebuildMenu
-        this._reconnectTimerId = -1;
-
-        // Initial rebuild to show the first countdown number
-        this._fetchFullStateAndRebuildMenu(ip);
-
-        this._reconnectTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-            this._reconnectCountdown--;
-
-            if (this._reconnectCountdown <= 0) {
-                this._reconnectTimerId = null;
-                console.log(`Phone HUB: Countdown reached 0, auto-reconnecting to ${ip}`);
-                this.refreshDevices(true);
-                return GLib.SOURCE_REMOVE;
-            }
-
-            // Update UI with new countdown value
-            this._fetchFullStateAndRebuildMenu(ip);
-            return GLib.SOURCE_CONTINUE;
-        });
-    }
-
-    _scheduleWebSocketReconnect() {
-        if (!this.checked || !this._wsIp) return;
-        if (this._wsReconnectTimer) return;
-
-        console.log(`Phone HUB: Scheduling WebSocket reconnect in 5s...`);
-        this._wsReconnectTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
-            this._wsReconnectTimer = null;
-            if (this.checked && this._wsIp) {
-                this._connectWebSocket(this._wsIp);
-            }
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _onWebSocketMessage(type, message) {
-        if (type !== Soup.WebsocketDataType.TEXT) return;
+    _onWebSocketMessage(text) {
         try {
-            const text = new TextDecoder().decode(message.toArray());
             const data = JSON.parse(text);
 
-            if (this._wsPingTimer) {
-                GLib.source_remove(this._wsPingTimer);
-            }
-            this._wsPingTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
-                console.log("Phone HUB: WebSocket ping timeout, closing connection");
-                if (this._wsConnection) {
-                    this._wsConnection.close(Soup.WebsocketCloseCode.ABNORMAL, "Ping timeout");
-                }
-                this._onWebSocketClosed();
-                return GLib.SOURCE_REMOVE;
-            });
-
-            if (data.type === "PING") {
-                if (this._wsConnection) {
-                    this._wsConnection.send_text("{\"type\":\"PONG\"}");
-                }
-            } else if (data.type === "CALL_STATUS") {
+            if (data.type === "CALL_STATUS") {
                 console.log(`Phone HUB: Received CALL_STATUS event: ${data.status} for number: ${data.number}`);
                 this._handleCallEvent(data.status, data.number);
+            } else if (data.type === "DEVICE_STATUS") {
+                console.log(`Phone HUB: Received DEVICE_STATUS event: Battery ${data.battery}%`);
+                this._updateBatteryUI(data.battery);
+                this._updateBluetoothUI(data.bluetooth);
+                this._updateDataUI(data.data_status, data.operator, data.network_type);
             } else if (data.type === "NOTIFICATION") {
                 this._handleNotificationEvent(data);
             } else if (data.type === "CLEAR_ALL") {
                 this._notifiedIds.clear();
+            } else if (data.type === "FIND_MY_PHONE") {
+                if (data.status === "stopped") {
+                    this.setRingingState(false);
+                    if (this._topBarRef && this._topBarRef.resetFindPhone) {
+                        this._topBarRef.resetFindPhone();
+                    }
+                }
             } else if (data.type === "UNPAIR") {
                 console.log("Phone HUB: Received UNPAIR message from phone.");
                 this._forgetDevice();
@@ -342,7 +177,7 @@ export const PhoneHubToggle = GObject.registerClass({
         if ((status === "RINGING" || status === "OFFHOOK") && this._lastCallStatus !== "RINGING" && this._lastCallStatus !== "OFFHOOK") {
             const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
             const scriptPath = `${extPath}/callWindow.js`;
-            const ip = this._wsIp;
+            const ip = this._wsManager.ip;
 
             let argv = ['gjs', '-m', scriptPath, '--host', ip, '--number', number || 'Unknown Caller', '--status', status.toLowerCase()];
             if (s.restToken) {
@@ -497,7 +332,7 @@ export const PhoneHubToggle = GObject.registerClass({
 
         if (!this._notifiedIds.has(notif.id)) {
             this._notifiedIds.add(notif.id);
-            this._showPhoneNotification(this._wsIp, notif);
+            this._showPhoneNotification(this._wsManager.ip, notif);
         }
     }
 
@@ -623,7 +458,7 @@ export const PhoneHubToggle = GObject.registerClass({
 
         // Optimization: If we're in a countdown, we already know the device is offline.
         // Skip metadata and ADB checks to keep the countdown smooth.
-        if (this._reconnectTimerId) {
+        if (this._wsManager.reconnectTimerId) {
             this._isConnected = false;
             this._deviceSection.removeAll();
             if (this._topBarRef) this._topBarRef.updateVisibility(false);
@@ -657,7 +492,7 @@ export const PhoneHubToggle = GObject.registerClass({
                 this._deviceSection.addMenuItem(headerItem);
 
                 // Manual/Auto Connect Button with Countdown
-                const connectLabel = `Reconnecting in ${this._reconnectCountdown}...`;
+                const connectLabel = `Reconnecting in ${this._wsManager.reconnectCountdown}...`;
                 let connectItem = new PopupMenu.PopupMenuItem(connectLabel);
                 connectItem.insert_child_at_index(new St.Icon({
                     icon_name: 'view-refresh-symbolic',
@@ -665,13 +500,13 @@ export const PhoneHubToggle = GObject.registerClass({
                 }), 0);
 
                 connectItem.connect('activate', () => {
-                    this._clearReconnectTimer();
+                    this._wsManager.clearReconnectTimer();
                     this.subtitle = 'Connecting...';
                     this.refreshDevices(true);
                 });
                 this._deviceSection.addMenuItem(connectItem);
 
-                const statusLabel = this._isConnecting ? 'Connecting...' : 'Offline';
+                const statusLabel = this._wsManager.isConnecting ? 'Connecting...' : 'Offline';
                 let offlineItem = new PopupMenu.PopupMenuItem(statusLabel);
                 offlineItem.insert_child_at_index(new St.Icon({
                     icon_name: 'network-offline-symbolic',
@@ -690,30 +525,42 @@ export const PhoneHubToggle = GObject.registerClass({
         let metadata = await this._getDeviceMetadata(pairedIp);
 
         // 2. Check ADB ONLY to see if the paired device is connected via USB
-        let adbMatch = null;
+        let usbAdbId = null;
+        let networkAdbId = null;
         let adbBattery = null;
         const adbDevices = await Adb.getDevices();
         console.log(`Phone HUB: Found ${adbDevices.length} ADB devices`);
 
         for (const deviceId of adbDevices) {
+            const isNetworkId = deviceId.includes(':');
             const deviceIps = await Adb.getDeviceIps(deviceId);
-            console.log(`Phone HUB: ADB Device ${deviceId} has IPs: ${deviceIps.join(', ')}`);
 
             // Match against ANY of the phone's IPs
             const isMatch = deviceIps.some(ip => ip.trim() === pairedIp.trim());
 
             if (isMatch) {
-                console.log(`Phone HUB: Found matching ADB device: ${deviceId}`);
-                adbMatch = deviceId;
-                adbBattery = await Adb.getBattery(deviceId);
-                break;
+                if (isNetworkId) {
+                    networkAdbId = deviceId;
+                } else {
+                    usbAdbId = deviceId;
+                }
+                // Update battery if we haven't yet
+                if (!adbBattery) adbBattery = await Adb.getBattery(deviceId);
+            }
+        }
+
+        // 3. Notify for USB devices if no Network ADB is active for them
+        if (usbAdbId && !networkAdbId) {
+            if (!this._notifiedWifiAdbDevices.has(usbAdbId)) {
+                Main.notify("Phone HUB", "ADB WIFI available, check extension to configure");
+                this._notifiedWifiAdbDevices.add(usbAdbId);
             }
         }
 
         if (!metadata) {
             this._isConnected = false;
             this.subtitle = 'Disconnected';
-            this._startReconnectCountdown(pairedIp);
+            this._wsManager.startReconnectCountdown(pairedIp);
             return true;
         }
 
@@ -728,12 +575,14 @@ export const PhoneHubToggle = GObject.registerClass({
             Settings.saveSettings(s);
         }
 
+        const primaryId = networkAdbId || usbAdbId || pairedIp;
+
         this._updateMenu([{
-            id: adbMatch || pairedIp,
+            id: primaryId,
             ip: pairedIp,
             name: metadata?.name || "Paired Phone",
-            isAdb: !!adbMatch,
-            isNetwork: true,
+            isAdb: !!(usbAdbId || networkAdbId),
+            isNetworkAdb: !!networkAdbId,
             isPaired: isPaired,
             battery: adbBattery
         }]);
@@ -797,8 +646,9 @@ export const PhoneHubToggle = GObject.registerClass({
             if (this._topBarRef) this._topBarRef.updateVisibility(false);
         } else {
             visibleDevices.forEach(dev => {
-                let connectionLabel = dev.isAdb ? `${dev.name} (ADB + Network)` : `${dev.name} (Network)`;
-                this._addDeviceToMenu(dev.id, connectionLabel, !dev.isAdb, dev.isPaired);
+                let connectionType = dev.isNetworkAdb ? "WiFi ADB" : (dev.isAdb ? "USB ADB" : "Network");
+                let connectionLabel = `${dev.name} (${connectionType})`;
+                this._addDeviceToMenu(dev.id, connectionLabel, !dev.isAdb, dev.isPaired, dev.isNetworkAdb);
                 if (this._topBarRef) {
                     this._topBarRef.updateVisibility(true);
                     this._topBarRef.rebuildMenu(dev.id, dev.name, dev.isPaired, !dev.isAdb);
@@ -952,9 +802,10 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
     getFindMyPhoneItem(isPaired, deviceId, isNetwork) {
-        let findPhoneItem = new PopupMenu.PopupMenuItem('Find My Phone');
+        this._isRinging = this._isRinging || false;
+        let findPhoneItem = new PopupMenu.PopupMenuItem(this._isRinging ? 'Stop Ringing Phone' : 'Find My Phone');
         const icon = new St.Icon({
-            icon_name: 'audio-volume-high-symbolic',
+            icon_name: this._isRinging ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
             style_class: 'popup-menu-icon',
         });
         findPhoneItem.insert_child_at_index(icon, 0);
@@ -963,7 +814,6 @@ export const PhoneHubToggle = GObject.registerClass({
             findPhoneItem.sensitive = false;
         }
 
-        let isRinging = false;
         findPhoneItem.connect('activate', async () => {
             let ip = isNetwork ? deviceId : null;
             if (!isNetwork) {
@@ -979,21 +829,24 @@ export const PhoneHubToggle = GObject.registerClass({
 
             const s = Settings.loadSettings();
             const token = s.restToken;
-            const action = isRinging ? 'stop' : 'start';
+            const action = this._isRinging ? 'stop' : 'start';
 
             try {
                 const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
                 SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                     try {
                         const bytes = session.send_and_read_finish(res);
-                        // No need to parse if we just care about success
-                        isRinging = !isRinging;
-                        if (isRinging) {
-                            findPhoneItem.label.text = 'Stop Ringing Phone';
-                            icon.icon_name = 'audio-volume-muted-symbolic';
-                        } else {
-                            findPhoneItem.label.text = 'Find My Phone';
-                            icon.icon_name = 'audio-volume-high-symbolic';
+                        let decoder = new TextDecoder();
+                        let text = decoder.decode(bytes.get_data ? bytes.get_data() : bytes.toArray());
+                        let data = JSON.parse(text);
+
+                        if (data.status === "ringing") {
+                            this.setRingingState(true);
+                            if (this._topBarRef && this._topBarRef.setRingingState) {
+                                this._topBarRef.setRingingState(true);
+                            }
+                        } else if (data.status === "stopped") {
+                            this.setRingingState(false);
                         }
                     } catch (e) {
                         console.error(`Find My Phone Error: ${e.message}`);
@@ -1004,7 +857,65 @@ export const PhoneHubToggle = GObject.registerClass({
             }
         });
 
+        this._updateFindPhoneUI = () => {
+            if (this._isRinging) {
+                findPhoneItem.label.text = 'Stop Ringing Phone';
+                icon.icon_name = 'audio-volume-muted-symbolic';
+            } else {
+                findPhoneItem.label.text = 'Find My Phone';
+                icon.icon_name = 'audio-volume-high-symbolic';
+            }
+        };
+
         return findPhoneItem;
+    }
+
+    getWifiAdbItem(deviceId, ip) {
+        let wifiAdbItem = new PopupMenu.PopupMenuItem('Switch to Wireless ADB');
+        wifiAdbItem.insert_child_at_index(new St.Icon({
+            icon_name: 'network-wireless-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+
+        if (!ip) {
+            wifiAdbItem.sensitive = false;
+            wifiAdbItem.label.text += ' (IP unknown)';
+        }
+
+        wifiAdbItem.connect('activate', async () => {
+            Main.notify("Phone HUB", "Enabling Wireless ADB...");
+            try {
+                const success = await Adb.enableTcpip(deviceId);
+                if (success) {
+                    // Wait 2 seconds for the device to restart ADB in TCPIP mode
+                    GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+                        Adb.connectIp(ip).then(connected => {
+                            if (connected) {
+                                Main.notify("Phone HUB", "Successfully connected via WiFi ADB!");
+                                this.refreshDevices(true);
+                            } else {
+                                Main.notify("Phone HUB", "Failed to connect via WiFi. Is your phone on the same network?");
+                            }
+                        });
+                        return GLib.SOURCE_REMOVE;
+                    });
+                } else {
+                    Main.notify("Phone HUB", "Failed to enable TCP mode on device.");
+                }
+            } catch (e) {
+                console.error(`WiFi ADB Error: ${e.message}`);
+                Main.notify("Phone HUB", "Error enabling Wireless ADB.");
+            }
+        });
+
+        return wifiAdbItem;
+    }
+
+    setRingingState(state) {
+        this._isRinging = state;
+        if (this._updateFindPhoneUI) {
+            this._updateFindPhoneUI();
+        }
     }
 
 
@@ -1038,8 +949,12 @@ export const PhoneHubToggle = GObject.registerClass({
             style: 'margin-top: 4px; margin-left: 0px;'
         });
 
+        const opText = isPaired
+            ? (this._lastOperator || (this._lastDataStatus === 'on' ? 'Mobile Network' : 'Connected'))
+            : '';
+
         this._operatorLabel = new St.Label({
-            text: isPaired ? 'Mobile Network' : '',
+            text: opText,
             style: 'font-size: 1em; font-weight: bold; opacity: 1; color: white',
             y_align: Clutter.ActorAlign.CENTER,
             x_expand: true
@@ -1054,31 +969,34 @@ export const PhoneHubToggle = GObject.registerClass({
         });
 
         this._networkTypeLabel = new St.Label({
-            text: '',
+            text: this._lastNetworkType || '',
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white'
         });
         iconsBox.add_child(this._networkTypeLabel);
 
+        const btStatus = this._lastBluetoothStatus || 'on';
         this._bluetoothIcon = new St.Icon({
-            icon_name: 'bluetooth-active-symbolic', // Will change to bluetooth-disabled-symbolic if off
+            icon_name: btStatus === 'on' ? 'bluetooth-active-symbolic' : 'bluetooth-disabled-symbolic',
             style_class: 'popup-menu-icon',
-            opacity: 120,
+            opacity: btStatus === 'on' ? 255 : 120,
 
             style: "color: white; font-size: 0.80em;   margin-right: 8px;"
         });
         iconsBox.add_child(this._bluetoothIcon);
 
+        const dataStatus = this._lastDataStatus || 'off';
         this._dataIcon = new St.Icon({
-            icon_name: 'network-cellular-offline-symbolic',
+            icon_name: dataStatus === 'on' ? 'network-transmit-receive-symbolic' : 'network-cellular-offline-symbolic',
             style_class: 'popup-menu-icon',
-            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white',
+            opacity: dataStatus === 'on' ? 255 : 120,
+            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; color: white',
 
         });
         iconsBox.add_child(this._dataIcon);
 
         this._batteryLabel = new St.Label({
-            text: '--%',
+            text: this._lastBatteryLevel ? `${this._lastBatteryLevel}%` : '--%',
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 0.85em; margin-right: 4px; opacity: 0.8; color: white;'
         });
@@ -1102,7 +1020,7 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
 
-    async _addDeviceToMenu(deviceId, label, isNetwork, isPaired = false) {
+    async _addDeviceToMenu(deviceId, label, isNetwork, isPaired = false, isNetworkAdb = false) {
 
         try {
             /* ---------- Ask for re pair for known unpaired devices ---------- */
@@ -1146,7 +1064,6 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
             if (isPaired) {
-                this._startStatusPolling(deviceId, isNetwork);
                 const hasScrcpy = Scrcpy.checkScrcpy();
                 /* ---------- header ---------- */
 
@@ -1155,6 +1072,17 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
                 this._deviceSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+                /* ---------- WiFi ADB Switch (USB Only) ---------- */
+                if (!isNetwork && !isNetworkAdb) {
+                    const settings = Settings.loadSettings();
+                    let ipForWifi = settings.phoneIp;
+                    if (!ipForWifi) {
+                        const ips = await Adb.getDeviceIps(deviceId);
+                        ipForWifi = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                    }
+                    this._deviceSection.addMenuItem(this.getWifiAdbItem(deviceId, ipForWifi));
+                }
 
 
                 /* ---------- Mount ---------- */
@@ -1186,7 +1114,7 @@ export const PhoneHubToggle = GObject.registerClass({
                 this._deviceSection.addMenuItem(cameraToggle);
 
                 /* ---------- Mirror ---------- */
-                let mirrorToggle = this.getMirrorToggle(isPaired, isNetwork, deviceId, hasScrcpy);
+                let mirrorToggle = this.getMirrorToggle(isPaired, isNetwork, deviceId, this.isScrcpyInstalled);
                 this._deviceSection.addMenuItem(mirrorToggle);
 
 
@@ -1215,7 +1143,6 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
     _forgetDevice() {
-        this._stopStatusPolling();
         const settings = Settings.loadSettings();
         const ip = settings.phoneIp;
 
@@ -1243,145 +1170,11 @@ export const PhoneHubToggle = GObject.registerClass({
     /* ===============================
        Device Status Polling (Battery & Data)
     =================================*/
-    async _startStatusPolling(deviceId, isNetwork) {
-        this._stopStatusPolling();
-
-        const s = Settings.loadSettings();
-        let ip = isNetwork ? deviceId : s.phoneIp;
-
-        if (!ip && !isNetwork) {
-            const ips = await Adb.getDeviceIps(deviceId);
-            ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-        }
-
-        if (!ip) return;
-        this._lastDataIP = ip;
-
-        this._fetchBatteryLevel(ip);
-        this._fetchDataStatus(ip);
-        this._fetchBluetoothStatus(ip);
-
-        this._statusPollingId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 300, () => {
-            this._fetchBatteryLevel(ip);
-            this._fetchDataStatus(ip);
-            this._fetchBluetoothStatus(ip);
-            return GLib.SOURCE_CONTINUE;
-        });
-    }
-
-    _stopStatusPolling() {
-        if (this._statusPollingId) {
-            GLib.source_remove(this._statusPollingId);
-            this._statusPollingId = null;
-        }
-    }
-
-    async _fetchBatteryLevel(ip) {
-        const s = Settings.loadSettings();
-        const password = s.restToken;
-        if (!password) return;
-
-        const argv = [
-            'sshpass', '-p', password,
-            'ssh', '-p', '2222',
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'ConnectTimeout=5',
-            `phonehub@${ip}`,
-            'battery'
-        ];
-
-        try {
-            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-            proc.communicate_utf8_async(null, null, (p, res) => {
-                try {
-                    let [ok, stdout, stderr] = p.communicate_utf8_finish(res);
-                    if (ok && stdout) {
-                        // Expected output: "Battery Level: 85%"
-                        const match = stdout.match(/Battery Level: (\d+)%/);
-                        if (match && match[1]) {
-                            this._updateBatteryUI(parseInt(match[1]));
-                        }
-                    }
-                } catch (e) {
-                    console.error(`Battery fetch failed: ${e.message}`);
-                }
-            });
-        } catch (e) {
-            console.error(`Battery exec failed: ${e.message}`);
-        }
-    }
-
-    async _fetchDataStatus(ip) {
-        const s = Settings.loadSettings();
-        const password = s.restToken;
-        if (!password) return;
-
-        const argv = [
-            'sshpass', '-p', password,
-            'ssh', '-p', '2222',
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'ConnectTimeout=5',
-            `phonehub@${ip}`,
-            'mobile_data status'
-        ];
-
-        try {
-            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-            proc.communicate_utf8_async(null, null, (p, res) => {
-                try {
-                    let [ok, stdout] = p.communicate_utf8_finish(res);
-                    if (ok && stdout) {
-                        const status = stdout.includes(': on') ? 'on' : 'off';
-                        let operator = '';
-                        let networkType = '';
-                        if (stdout.includes('(')) {
-                            const content = stdout.substring(stdout.indexOf('(') + 1, stdout.indexOf(')')).trim();
-                            if (content.includes(' - ')) {
-                                [operator, networkType] = content.split(' - ').map(s => s.trim());
-                            } else {
-                                operator = content;
-                            }
-                        }
-                        this._updateDataUI(status, operator, networkType);
-                    }
-                } catch (e) { }
-            });
-        } catch (e) { }
-    }
-
-    async _fetchBluetoothStatus(ip) {
-        const s = Settings.loadSettings();
-        const password = s.restToken;
-        if (!password) return;
-
-        const argv = [
-            'sshpass', '-p', password,
-            'ssh', '-p', '2222',
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'ConnectTimeout=5',
-            `phonehub@${ip}`,
-            'bluetooth'
-        ];
-
-        try {
-            let proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-            proc.communicate_utf8_async(null, null, (p, res) => {
-                try {
-                    let [ok, stdout] = p.communicate_utf8_finish(res);
-                    if (ok && stdout) {
-                        const status = stdout.includes(': on') ? 'on' : 'off';
-                        this._updateBluetoothUI(status);
-                    }
-                } catch (e) { }
-            });
-        } catch (e) { }
-    }
 
     _updateDataUI(status, operator, networkType) {
         this._lastDataStatus = status;
+        this._lastOperator = operator;
+        this._lastNetworkType = networkType;
         const iconName = status === 'on'
             ? 'network-transmit-receive-symbolic'
             : 'network-cellular-offline-symbolic';
@@ -1405,6 +1198,7 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
     _updateBluetoothUI(status) {
+        this._lastBluetoothStatus = status;
         // status is 'on' or 'off'
         const iconName = status === 'on'
             ? 'bluetooth-active-symbolic'
@@ -1492,7 +1286,7 @@ export const PhoneHubToggle = GObject.registerClass({
             Mount.unmountDevice(s.sshfsMountPoint).catch(e => console.error(e));
         }
 
-        this._scanning = true;
+
     }
 
     syncMountState(state) {

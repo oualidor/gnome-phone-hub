@@ -16,6 +16,7 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
     _init() {
         // 0.0 is the alignment (center)
         super._init(0.5, 'Phone HUB', false);
+        this.menu.box.set_style('min-width: 330px;');
 
         // Add a Phone icon and Label to the top bar
         let hbox = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
@@ -97,78 +98,13 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         }
     }
 
-    getDeviceheaderMenu(label, isPaired) {
-        // Main Header Container (Vertical)
-        let headerBox = new St.BoxLayout({
-            vertical: true,
-            x_align: Clutter.ActorAlign.FILL,
-            x_expand: true,
-            style: 'padding: 4px; min-width: 300px;'
-        });
 
-        // Row 2: Status & Icons
-        let statusRow = new St.BoxLayout({
-            vertical: false,
-            style: 'margin-top: 0px; margin-left: 0px;'
-        });
-
-        this._menuOperatorLabel = new St.Label({
-            text: isPaired ? 'Mobile Network' : '',
-            style: 'font-size: 1em; font-weight: bold; opacity: 1; color: white',
-            y_align: Clutter.ActorAlign.CENTER,
-            x_expand: true
-        });
-        statusRow.add_child(this._menuOperatorLabel);
-
-        // Status Icons Box (Right)
-        let iconsBox = new St.BoxLayout({
-            vertical: false,
-            style_class: 'battery-container',
-            visible: isPaired
-        });
-
-        this._menuNetworkTypeLabel = new St.Label({
-            text: '',
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white'
-        });
-        iconsBox.add_child(this._menuNetworkTypeLabel);
-
-        this._menuBluetoothIcon = new St.Icon({
-            icon_name: 'bluetooth-active-symbolic',
-            style_class: 'popup-menu-icon',
-            opacity: 120,
-            style: "color: white; font-size: 0.80em; margin-right: 8px;"
-        });
-        iconsBox.add_child(this._menuBluetoothIcon);
-
-        this._menuDataIcon = new St.Icon({
-            icon_name: 'network-cellular-offline-symbolic',
-            style_class: 'popup-menu-icon',
-            style: 'font-size: 0.8em; margin-right: 8px; font-weight: bold; opacity: 1; color: white',
-        });
-        iconsBox.add_child(this._menuDataIcon);
-
-        this._menuBatteryLabel = new St.Label({
-            text: '--%',
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'font-size: 0.85em; margin-right: 4px; opacity: 0.8; color: white;'
-        });
-        iconsBox.add_child(this._menuBatteryLabel);
-
-        statusRow.add_child(iconsBox);
-        headerBox.add_child(statusRow);
-
-        let headerItem = new PopupMenu.PopupMenuItem('');
-        headerItem.add_child(headerBox);
-        headerItem.sensitive = false;
-        return headerItem;
-    }
 
     getFindMyPhoneItem(isPaired, deviceId, isNetwork) {
-        let findPhoneItem = new PopupMenu.PopupMenuItem('Find My Phone');
+        this._isRinging = this._isRinging || false;
+        let findPhoneItem = new PopupMenu.PopupMenuItem(this._isRinging ? 'Stop Ringing Phone' : 'Find My Phone');
         const icon = new St.Icon({
-            icon_name: 'audio-volume-high-symbolic',
+            icon_name: this._isRinging ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
             style_class: 'popup-menu-icon',
         });
         findPhoneItem.insert_child_at_index(icon, 0);
@@ -177,7 +113,6 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
             findPhoneItem.sensitive = false;
         }
 
-        let isRinging = false;
         findPhoneItem.connect('activate', async () => {
             const s = Settings.loadSettings();
             let ip = s.phoneIp;
@@ -192,21 +127,28 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
             if (!ip) return;
 
             const token = s.restToken;
-            const action = isRinging ? 'stop' : 'start';
+            const action = this._isRinging ? 'stop' : 'start';
 
             try {
                 const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
                 const session = new Soup.Session();
                 session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                     try {
-                        session.send_and_read_finish(res);
-                        isRinging = !isRinging;
-                        if (isRinging) {
-                            findPhoneItem.label.text = 'Stop Ringing Phone';
-                            icon.icon_name = 'audio-volume-muted-symbolic';
-                        } else {
-                            findPhoneItem.label.text = 'Find My Phone';
-                            icon.icon_name = 'audio-volume-high-symbolic';
+                        const bytes = session.send_and_read_finish(res);
+                        let decoder = new TextDecoder();
+                        let text = decoder.decode(bytes.get_data ? bytes.get_data() : bytes.toArray());
+                        let data = JSON.parse(text);
+
+                        if (data.status === "ringing") {
+                            this.setRingingState(true);
+                            if (this._toggleRef && this._toggleRef.setRingingState) {
+                                this._toggleRef.setRingingState(true);
+                            }
+                        } else if (data.status === "stopped") {
+                            this.setRingingState(false);
+                            if (this._toggleRef && this._toggleRef.setRingingState) {
+                                this._toggleRef.setRingingState(false);
+                            }
                         }
                     } catch (e) {
                         console.error(`Find My Phone Error: ${e.message}`);
@@ -217,7 +159,28 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
             }
         });
 
+        this._updateFindPhoneUI = () => {
+            if (this._isRinging) {
+                findPhoneItem.label.text = 'Stop Ringing Phone';
+                icon.icon_name = 'audio-volume-muted-symbolic';
+            } else {
+                findPhoneItem.label.text = 'Find My Phone';
+                icon.icon_name = 'audio-volume-high-symbolic';
+            }
+        };
+
         return findPhoneItem;
+    }
+
+    setRingingState(state) {
+        this._isRinging = state;
+        if (this._updateFindPhoneUI) {
+            this._updateFindPhoneUI();
+        }
+    }
+
+    resetFindPhone() {
+        this.setRingingState(false);
     }
 
     async rebuildMenu(deviceId, deviceName, isPaired, isNetwork) {
@@ -236,14 +199,11 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
         const hasScrcpy = Scrcpy.checkScrcpy();
         const settings = Settings.loadSettings();
 
-        /* ---------- Header ---------- */
-        let headerItem = this.getDeviceheaderMenu(deviceName, isPaired);
-        this.menu.addMenuItem(headerItem);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
 
         /* ---------- SSHFS Mount ---------- */
         const mountPoint = settings.sshfsMountPoint;
-        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint));
+        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint),);
         let mountToggle = this._mountToggle;
         mountToggle.insert_child_at_index(new St.Icon({
             icon_name: 'folder-remote-symbolic',
