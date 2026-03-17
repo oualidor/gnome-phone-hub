@@ -13,14 +13,17 @@ import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
 try {
-    const USER_DATA_DIR = GLib.get_user_data_dir()
 
-    let cssFile = Gio.File.new_for_path(USER_DATA_DIR + '/gnome-shell/extensions/phone-hub@oualidkhial/callWindow.css');
-    console.error("cssFile", cssFile);
     let host = '127.0.0.1';
     let token = '';
     let number = 'Unknown Caller';
     let statusstr = 'ringing';
+
+
+    const USER_DATA_DIR = GLib.get_user_data_dir()
+
+    let cssFile = Gio.File.new_for_path(USER_DATA_DIR + '/gnome-shell/extensions/phone-hub@oualidkhial/callWindow.css');
+
 
     for (let i = 0; i < ARGV.length; i++) {
         if (ARGV[i] === '--host' && ARGV[i + 1]) host = ARGV[i + 1];
@@ -37,6 +40,9 @@ try {
     const session = new Soup.Session();
 
     app.connect('activate', () => {
+
+        let cssFile = Gio.File.new_for_path(USER_DATA_DIR + '/gnome-shell/extensions/phone-hub@oualidkhial/callWindow.css');
+
 
         let provider = new Gtk.CssProvider();
         provider.load_from_file(cssFile);

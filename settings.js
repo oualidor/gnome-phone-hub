@@ -9,6 +9,7 @@ export function loadSettings() {
     if (!file.query_exists(null)) {
         return {
             phoneIp: null,
+            phoneBtMac: null,
             enableCallNotifications: true,
             enablePhoneNotifications: true,
             deviceName: 'Paired Phone',

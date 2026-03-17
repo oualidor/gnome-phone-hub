@@ -18,26 +18,26 @@ import Pango from 'gi://Pango';
 try {
     console.log('Phone HUB: Launcher script started');
 
-    // --- ARGS ---
     let appsJson = '[]';
     let host = '127.0.0.1';
     let scrcpyPath = '/usr/bin/scrcpy';
+    let deviceId = ''
+    let deviceName = ''
 
     for (let i = 0; i < ARGV.length; i++) {
         if (ARGV[i] === '--apps' && ARGV[i + 1]) appsJson = ARGV[i + 1];
         if (ARGV[i] === '--host' && ARGV[i + 1]) host = ARGV[i + 1];
         if (ARGV[i] === '--scrcpy' && ARGV[i + 1]) scrcpyPath = ARGV[i + 1];
+        if (ARGV[i] === '--deviceId' && ARGV[i + 1]) deviceId = ARGV[i + 1];
+        if (ARGV[i] === '--deviceName' && ARGV[i + 1]) deviceName = ARGV[i + 1];
     }
 
     console.log(`Phone HUB: Parsing ${appsJson.length} bytes of app data`);
     const ALL_APPS = JSON.parse(appsJson);
     console.log(`Phone HUB: Parsed ${ALL_APPS.length} apps`);
 
-    // UI setup - Gtk.Application handles init normally
-    // Gtk.init(); 
-
     const app = new Gtk.Application({
-        application_id: 'com.oualidkhial.phonehub.launcher.' + Date.now(), // Unique ID for testing
+        application_id: 'com.oualidkhial.phonehub.launcher.' + Date.now(),
         flags: Gio.ApplicationFlags.FLAGS_NONE
     });
 
@@ -46,7 +46,7 @@ try {
         try {
             const window = new Gtk.ApplicationWindow({
                 application: app,
-                title: `Launch App on PC (${host})`,
+                title: `Launch App on PC (${deviceId})`,
                 default_width: 500,
                 default_height: 600,
             });
@@ -171,9 +171,11 @@ try {
                 try {
                     const scrcpyArgs = [
                         scrcpyPath,
-                        '-s', host,
-                        // `--new-display=${width}x${height}`,
-                        `--start-app=${packageName}`
+                        '-s', deviceId,
+                        `--new-display=${width}x${height}`,
+                        `--start-app=${packageName}`,
+                        '-Sw',
+                        '--no-vd-system-decorations'
                     ];
                     console.log(`Phone HUB Launcher: Starting scrcpy: ${scrcpyArgs.join(' ')}`);
                     Gio.Subprocess.new(scrcpyArgs, Gio.SubprocessFlags.NONE);
@@ -186,6 +188,41 @@ try {
             });
 
             btnBox.append(launchBtn);
+
+
+            const exportBtn = new Gtk.Button({ label: 'Export .desktop' });
+            exportBtn.connect('clicked', () => {
+                const selected = selectionModel.get_selected_item();
+                if (!selected) {
+                    console.log('No app selected for export.');
+                    return;
+                }
+
+                const width = parseInt(widthEntry.get_text()) || 1080;
+                const height = parseInt(heightEntry.get_text()) || 1920;
+                const packageName = selected.package;
+                const appName = selected.name.replace(/[^a-z0-9]/gi, '_'); // safe filename
+
+                const desktopDir = GLib.get_user_data_dir() + '/applications';
+                GLib.mkdir_with_parents(desktopDir, 0o755);
+
+                const desktopPath = `${desktopDir}/${appName}.desktop`;
+                const desktopContent = `[Desktop Entry]
+Name=${selected.name}
+Comment=Launch ${selected.name} via scrcpy
+Exec=${scrcpyPath} -s ${host} --new-display=${width}x${height} --start-app=${packageName} -Sw --no-vd-system-decorations
+Terminal=false
+Type=Application
+Categories=Utility;`;
+
+                try {
+                    GLib.file_set_contents(desktopPath, desktopContent);
+                    console.log(`.desktop file created: ${desktopPath}`);
+                } catch (e) {
+                    console.error(`Failed to create .desktop: ${e.message}`);
+                }
+            });
+            btnBox.append(exportBtn);
             mainBox.append(btnBox);
 
             window.present();

@@ -153,6 +153,7 @@ export const PairingDialog = GObject.registerClass({
                         const response = JSON.parse(text);
                         this._pendingRestToken = response.restToken;
                         this._pendingWsToken = response.wsToken;
+                        this._pendingBtMac = response.bluetoothMac || null;
 
                         this._statusLabel.text = 'Pending... Accept on your phone.';
                         this._startPolling(ip);
@@ -204,7 +205,7 @@ export const PairingDialog = GObject.registerClass({
                             this._pollTimerId = null;
                         }
                         this._statusLabel.text = 'Successfully paired!';
-                        if (this._callback) this._callback(ip, this._pendingRestToken, this._pendingWsToken);
+                        if (this._callback) this._callback(ip, this._pendingRestToken, this._pendingWsToken, this._pendingBtMac);
                         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                             this.close();
                             return GLib.SOURCE_REMOVE;

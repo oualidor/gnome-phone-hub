@@ -254,16 +254,27 @@ try {
     }
 
     function startCall(number) {
-        console.log(`Phone HUB: Starting call to ${number} via ${host}...`);
-        const url = `http://${host}:8080/call?token=${token}&number=${encodeURIComponent(number)}`;
-        const message = Soup.Message.new('POST', url);
-
-        session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+        if (!number) return;
+        const url = token ? `ws://${host}:8080/ws?token=${token}` : `ws://${host}:8080/ws`;
+        const message = Soup.Message.new('GET', url);
+        
+        console.log(`Phone HUB: Connecting to WebSocket for call to ${number}...`);
+        
+        session.websocket_connect_async(message, null, null, null, null, (sess, res) => {
             try {
-                session.send_and_read_finish(res);
-                console.log(`Phone HUB: Call initiated to ${number}`);
+                const connection = sess.websocket_connect_finish(res);
+                connection.send_text(JSON.stringify({
+                    type: 'DIAL',
+                    number: number,
+                    reqId: `dial_${Date.now()}`
+                }));
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                    connection.close(Soup.WebsocketCloseCode.NORMAL, "Done");
+                    return GLib.SOURCE_REMOVE;
+                });
+                console.log(`Phone HUB: Call initiated to ${number} via WebSocket`);
             } catch (e) {
-                console.error(`Phone HUB: Failed to start call: ${e.message}`);
+                console.error(`Phone HUB: Failed to initiate call: ${e.message}`);
             }
         });
     }

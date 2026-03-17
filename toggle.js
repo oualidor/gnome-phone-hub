@@ -16,6 +16,8 @@ import * as ScreenStream from './screenStream.js';
 import { PairingDialog } from './pairingDialog.js';
 import { WebSocketManager } from './webSocketManager.js';
 
+
+
 const SoupSession = new Soup.Session({ timeout: 5 });
 
 export const PhoneHubToggle = GObject.registerClass({
@@ -28,6 +30,9 @@ export const PhoneHubToggle = GObject.registerClass({
             iconName: 'phone-symbolic',
             toggleMode: true,
         });
+
+        this.callDialog = null;
+
 
         this.subtitle = 'Disabled';
 
@@ -60,6 +65,7 @@ export const PhoneHubToggle = GObject.registerClass({
         const _initSettings = Settings.loadSettings();
         this._lastKnownDeviceName = _initSettings.deviceName || 'Paired Phone';
         this._notifiedWifiAdbDevices = new Set();
+        this._installedApps = null;
 
         // WebSocket Manager
         this._wsManager = new WebSocketManager();
@@ -67,17 +73,24 @@ export const PhoneHubToggle = GObject.registerClass({
             if (this._topBarRef) this._topBarRef.updateVisibility(true);
             this._isConnected = true;
             this._fetchFullStateAndRebuildMenu(ip);
+            this._prefetchApps();
         });
 
         this._wsManager.connect('disconnected', () => {
             this.subtitle = 'Disconnected';
             this._isConnected = false;
             if (this._topBarRef) this._topBarRef.updateVisibility(false);
+            this.stopAllProcesses();
         });
 
         this._wsManager.connect('connecting', () => {
             this.subtitle = 'Connecting...';
         });
+
+        // this._wsManager.connect('phone-offline', () => {
+        //     this.buildDisconnecteddeviceMenu()
+
+        // })
 
         this._wsManager.connect('message', (mgr, text) => {
             this._onWebSocketMessage(text);
@@ -86,6 +99,7 @@ export const PhoneHubToggle = GObject.registerClass({
         this._wsManager.connect('reconnect-update', (mgr, countdown, ip) => {
             this._isConnected = false;
             this._fetchFullStateAndRebuildMenu(ip);
+            this.stopAllProcesses();
         });
 
         this._wsManager.connect('reconnect-cleared', () => {
@@ -128,14 +142,29 @@ export const PhoneHubToggle = GObject.registerClass({
         if (!pairedIp) {
             this._updateMenu([], null);
             return true;
+        } else {
+            if (!this._wsManager.isConnected && !this._wsManager.isConnecting) {
+                this._wsManager.openConnection(pairedIp);
+            } else if (force) {
+                this._fetchFullStateAndRebuildMenu(pairedIp);
+            }
+
         }
 
-        if (!this._wsManager.isConnected && !this._wsManager.isConnecting) {
-            this._wsManager.openConnection(pairedIp);
-        } else if (force) {
-            this._fetchFullStateAndRebuildMenu(pairedIp);
-        }
+
         return true;
+    }
+
+    async _prefetchApps() {
+        if (!this._wsManager.isConnected) return;
+        try {
+            console.log("Phone HUB: Pre-fetching apps list...");
+            const response = await this._wsManager.sendRequest('GET_APPS');
+            this._installedApps = response.apps || [];
+            console.log(`Phone HUB: Pre-fetched ${this._installedApps.length} apps`);
+        } catch (e) {
+            console.error(`Phone HUB: Failed to pre-fetch apps: ${e.message}`);
+        }
     }
 
     _onWebSocketMessage(text) {
@@ -176,7 +205,7 @@ export const PhoneHubToggle = GObject.registerClass({
 
         if ((status === "RINGING" || status === "OFFHOOK") && this._lastCallStatus !== "RINGING" && this._lastCallStatus !== "OFFHOOK") {
             const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
-            const scriptPath = `${extPath}/callWindow.js`;
+            const scriptPath = `${extPath}/apps/callWindow.js`;
             const ip = this._wsManager.ip;
 
             let argv = ['gjs', '-m', scriptPath, '--host', ip, '--number', number || 'Unknown Caller', '--status', status.toLowerCase()];
@@ -300,20 +329,19 @@ export const PhoneHubToggle = GObject.registerClass({
         }
     }
 
-    _sendCallAction(ip, action) {
-        if (!ip) return;
-        const s = Settings.loadSettings();
-        const url = `http://${ip}:8080/${action}${s.restToken ? `?token=${s.restToken}` : ''}`;
-        const msg = Soup.Message.new('POST', url);
-        const session = new Soup.Session();
-        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (source, result) => {
-            try {
-                session.send_and_read_finish(result);
-                console.log(`Phone HUB: Call action '${action}' sent successfully.`);
-            } catch (e) {
-                console.error(`Phone HUB: Failed to send call action '${action}': ${e.message}`);
-            }
-        });
+    async _sendCallAction(ip, action) {
+        if (!this._isConnected || !this._wsManager.isConnected) {
+            console.error(`Phone HUB: WebSocket not connected, cannot send call action '${action}'`);
+            return;
+        }
+
+        const type = action.toUpperCase(); // ANSWER, DECLINE
+        try {
+            await this._wsManager.sendRequest(type);
+            console.log(`Phone HUB: Call action '${type}' sent successfully via WebSocket.`);
+        } catch (e) {
+            console.error(`Phone HUB: Failed to send call action '${type}' via WebSocket: ${e.message}`);
+        }
     }
 
     _handleNotificationEvent(notif) {
@@ -407,9 +435,10 @@ export const PhoneHubToggle = GObject.registerClass({
         });
         pairBtn.connect('clicked', () => {
             this.menu.close();
-            const dialog = new PairingDialog((newIp, restToken, wsToken) => {
+            const dialog = new PairingDialog((newIp, restToken, wsToken, btMac) => {
                 Settings.saveSettings({
                     phoneIp: newIp,
+                    phoneBtMac: btMac || null,
                     restToken: restToken,
                     wsToken: wsToken
                 });
@@ -452,6 +481,85 @@ export const PhoneHubToggle = GObject.registerClass({
         return actionsItem;
     }
 
+    // buildDisconnecteddeviceMenu() {
+    //     if (this._topBarRef) this._topBarRef.updateVisibility(false);
+    //     const deviceName = this._lastKnownDeviceName || 'Paired Phone';
+
+
+    //     let headerItem = new PopupMenu.PopupMenuItem(deviceName + ' Offline');
+    //     headerItem.sensitive = false;
+    //     headerItem.label.style = 'font-weight: bold; opacity: 1.0;';
+    //     headerItem.insert_child_at_index(new St.Icon({
+    //         icon_name: 'phone-symbolic',
+    //         style_class: 'popup-menu-icon'
+    //     }), 0);
+
+    //     headerItem.add_child(new St.Widget({ x_expand: true }));
+
+    //     let forgetBtn = new St.Button({
+    //         child: new St.Icon({ icon_name: 'user-trash-symbolic', style_class: 'popup-menu-icon' }),
+    //         can_focus: true,
+    //         style_class: 'button',
+    //         x_align: Clutter.ActorAlign.END,
+    //     });
+    //     forgetBtn.connect('clicked', () => {
+    //         this._forgetDevice();
+    //         return Clutter.EVENT_STOP;
+    //     });
+    //     headerItem.add_child(forgetBtn);
+
+
+
+    //     let bluetoothButton = new St.Button({
+    //         child: new St.Icon({ icon_name: 'user-trash-symbolic', style_class: 'popup-menu-icon' }),
+    //         can_focus: true,
+    //         style_class: 'button',
+    //         x_align: Clutter.ActorAlign.END,
+    //     });
+    //     bluetoothButton.connect('clicked', () => {
+    //         this._forgetDevice();
+    //         return Clutter.EVENT_STOP;
+    //     });
+    //     headerItem.add_child(bluetoothButton);
+
+
+    //     this._deviceSection.addMenuItem(headerItem);
+
+
+
+    //     let connectItem = new PopupMenu.PopupMenuItem(`Reconnect`);
+    //     connectItem.insert_child_at_index(new St.Icon({
+    //         icon_name: 'view-refresh-symbolic',
+    //         style_class: 'popup-menu-icon'
+    //     }), 0);
+
+    //     connectItem.connect('activate', () => {
+    //         this._wsManager.clearReconnectTimer();
+    //         this.subtitle = 'Connecting...';
+    //         this.refreshDevices(true);
+    //     });
+    //     this._deviceSection.addMenuItem(connectItem);
+
+
+    //     // let connectUsingBluetooth = new PopupMenu.PopupMenuItem(`Reconnect using Bluetooth`);
+    //     // connectUsingBluetooth.insert_child_at_index(new St.Icon({
+    //     //     icon_name: 'view-refresh-symbolic',
+    //     //     style_class: 'popup-menu-icon'
+    //     // }), 0);
+
+    //     // connectUsingBluetooth.connect('activate', () => {
+    //     //     this._wsManager.clearReconnectTimer();
+    //     //     this.subtitle = 'Connecting...';
+    //     //     this.refreshDevices(true);
+    //     // });
+    //     this._deviceSection.addMenuItem(connectUsingBluetooth);
+
+
+
+
+
+    // }
+
     async _fetchFullStateAndRebuildMenu(pairedIp) {
         if (!pairedIp) return;
         const settings = Settings.loadSettings();
@@ -468,7 +576,7 @@ export const PhoneHubToggle = GObject.registerClass({
                 const deviceName = this._lastKnownDeviceName || 'Paired Phone';
 
                 // Device Header row with Forget button
-                let headerItem = new PopupMenu.PopupMenuItem(deviceName);
+                let headerItem = new PopupMenu.PopupMenuItem(deviceName + ' (Offline)');
                 headerItem.sensitive = false;
                 headerItem.label.style = 'font-weight: bold; opacity: 1.0;';
                 headerItem.insert_child_at_index(new St.Icon({
@@ -484,11 +592,7 @@ export const PhoneHubToggle = GObject.registerClass({
                     style_class: 'button',
                     x_align: Clutter.ActorAlign.END,
                 });
-                forgetBtn.connect('clicked', () => {
-                    this._forgetDevice();
-                    return Clutter.EVENT_STOP;
-                });
-                headerItem.add_child(forgetBtn);
+
                 this._deviceSection.addMenuItem(headerItem);
 
                 // Manual/Auto Connect Button with Countdown
@@ -506,14 +610,27 @@ export const PhoneHubToggle = GObject.registerClass({
                 });
                 this._deviceSection.addMenuItem(connectItem);
 
-                const statusLabel = this._wsManager.isConnecting ? 'Connecting...' : 'Offline';
-                let offlineItem = new PopupMenu.PopupMenuItem(statusLabel);
-                offlineItem.insert_child_at_index(new St.Icon({
-                    icon_name: 'network-offline-symbolic',
+
+                let forgetItem = new PopupMenu.PopupMenuItem('Unpair device');
+                forgetItem.insert_child_at_index(new St.Icon({
+                    icon_name: 'user-trash-symbolic',
                     style_class: 'popup-menu-icon'
                 }), 0);
-                offlineItem.sensitive = false;
-                this._deviceSection.addMenuItem(offlineItem);
+
+                forgetItem.connect('activate', () => {
+                    this._forgetDevice();
+                    return Clutter.EVENT_STOP;
+                });
+                this._deviceSection.addMenuItem(forgetItem);
+
+                // const statusLabel = this._wsManager.isConnecting ? 'Connecting...' : 'Offline';
+                // let offlineItem = new PopupMenu.PopupMenuItem(statusLabel);
+                // offlineItem.insert_child_at_index(new St.Icon({
+                //     icon_name: 'network-offline-symbolic',
+                //     style_class: 'popup-menu-icon'
+                // }), 0);
+                // offlineItem.sensitive = false;
+                // this._deviceSection.addMenuItem(offlineItem);
 
                 this._deviceSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             }
@@ -572,6 +689,9 @@ export const PhoneHubToggle = GObject.registerClass({
             // Persist so it survives extension restarts
             const s = Settings.loadSettings();
             s.deviceName = metadata.name;
+            if (metadata.bluetoothMac) {
+                s.phoneBtMac = metadata.bluetoothMac;
+            }
             Settings.saveSettings(s);
         }
 
@@ -612,6 +732,7 @@ export const PhoneHubToggle = GObject.registerClass({
                             resolve({
                                 name: data.deviceName || "Phone",
                                 authorized: data.authorized,
+                                bluetoothMac: data.bluetoothMac || null,
                                 callStatus: data.callStatus,
                                 callerNumber: data.callerNumber
                             });
@@ -638,11 +759,9 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
         if (visibleDevices.length === 0) {
-            let infoItem = new PopupMenu.PopupMenuItem('No paired devices');
-            infoItem.sensitive = false;
             let permanentMenu = this.getPermanentMenu();
             this._deviceSection.addMenuItem(permanentMenu);
-            this.subtitle = 'Disconnected';
+            this.subtitle = 'No paired device';
             if (this._topBarRef) this._topBarRef.updateVisibility(false);
         } else {
             visibleDevices.forEach(dev => {
@@ -894,7 +1013,7 @@ export const PhoneHubToggle = GObject.registerClass({
                                 Main.notify("Phone HUB", "Successfully connected via WiFi ADB!");
                                 this.refreshDevices(true);
                             } else {
-                                Main.notify("Phone HUB", "Failed to connect via WiFi. Is your phone on the same network?");
+                                Main.notify("Phone HUB", "Please check your phone configuration?");
                             }
                         });
                         return GLib.SOURCE_REMOVE;
@@ -1020,6 +1139,140 @@ export const PhoneHubToggle = GObject.registerClass({
     }
 
 
+    getMakeCallItem() {
+
+        const s = Settings.loadSettings();
+        let callItenm = new PopupMenu.PopupMenuItem('Make a call');
+        const icon = new St.Icon({
+            icon_name: 'audio-volume-muted-symbolic',
+            style_class: 'popup-menu-icon',
+        });
+        callItenm.insert_child_at_index(icon, 0);
+
+        callItenm.connect('activate', async () => {
+            try {
+                const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+
+                const scriptPath = `${extPath}/apps/Dialler/main.js`;
+                const argv = [
+                    'gjs',
+                    '-m',
+                    scriptPath,
+                    '--host', s.phoneIp,
+                    '--token', s.wsToken
+                ];
+
+
+                const proc = Gio.Subprocess.new(
+                    argv,
+                    Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+                );
+
+                const procs = this._getDeviceProcesses(s.phoneIp);
+                procs.dialler = proc;
+
+                proc.communicate_utf8_async(null, null, (p, res) => {
+
+                    let [, stdout, stderr] = p.communicate_utf8_finish(res);
+
+                    print("stdout:", stdout);
+                    print("stderr:", stderr);
+                });
+
+            } catch (e) {
+                console.error("Phone HUB", "Error making call.");
+                console.error(e)
+            }
+
+
+        })
+
+        return callItenm;
+    }
+
+
+
+    getAppsListItem(deviceId, deviceName) {
+        // /* ---------- Launch App on PC ---------- */
+        let launchAppItem = new PopupMenu.PopupMenuItem('Applications manager (Beta)');
+        launchAppItem.insert_child_at_index(new St.Icon({
+            icon_name: 'application-x-executable-symbolic',
+            style_class: 'popup-menu-icon',
+        }), 0);
+
+        // if (!isPaired) {
+        //     launchAppItem.sensitive = false;
+        //     launchAppItem.label.text += ' (Not Paired)';
+        // }
+
+        launchAppItem.connect('activate', async () => {
+            if (!this._isConnected || !this._wsManager.isConnected) {
+                Main.notify('Phone HUB', 'Phone not connected via WebSocket.');
+                return;
+            }
+
+            try {
+                let apps = this._installedApps;
+                if (!apps || apps.length === 0) {
+                    Main.notify('Phone HUB', 'Fetching apps via WebSocket...');
+                    const response = await this._wsManager.sendRequest('GET_APPS');
+                    apps = response.apps || [];
+                    this._installedApps = apps;
+                }
+
+                console.log(`Phone HUB: Using list of ${apps.length} apps`);
+
+                const appsJson = JSON.stringify(apps);
+                const extPath = Main.extensionManager.lookup('phone-hub@oualidkhial').path;
+                const scrcpyPath = Scrcpy.getScrcpyPath();
+                const phoneIp = Settings.loadSettings().phoneIp;
+
+                const proc = Gio.Subprocess.new(
+                    ['gjs', '-m', `${extPath}/apps/AppsLuncher/appLauncherWindow.js`,
+                        '--host', phoneIp,
+                        '--apps', appsJson,
+                        '--deviceId', deviceId,
+                        '--deviceName', deviceName,
+                        '--scrcpy', scrcpyPath],
+                    Gio.SubprocessFlags.STDERR_PIPE
+                );
+
+                const procs = this._getDeviceProcesses(phoneIp);
+                procs.app = proc;
+
+
+                const stderrStream = new Gio.DataInputStream({
+                    base_stream: proc.get_stderr_pipe(),
+                    close_base_stream: true
+                });
+
+                const readError = () => {
+                    stderrStream.read_line_async(GLib.PRIORITY_LOW, null, (stream, res) => {
+                        try {
+                            const [line] = stream.read_line_finish_utf8(res);
+                            if (line !== null) {
+                                console.error(`Phone HUB (Launcher Error): ${line}`);
+                                if (line.includes('Error') || line.includes('Failed')) {
+                                    Main.notify('Phone HUB Error', line.substring(0, 100));
+                                }
+                                readError();
+                            }
+                        } catch (e) { }
+                    });
+                };
+
+                readError();
+                this.menu.close();
+            } catch (e) {
+                console.error(e);
+                Main.notify('Phone HUB', `Failed to open app launcher: ${e.message}`);
+            }
+        });
+
+        return launchAppItem
+    }
+
+
     async _addDeviceToMenu(deviceId, label, isNetwork, isPaired = false, isNetworkAdb = false) {
 
         try {
@@ -1092,6 +1345,13 @@ export const PhoneHubToggle = GObject.registerClass({
                 this._deviceSection.addMenuItem(mountToggle);
 
 
+                let callToggle = this.getMakeCallItem();
+
+                this._deviceSection.addMenuItem(callToggle);
+
+
+
+
                 /* ---------- Call Notifications ---------- */
 
                 let callNotifToggle = this.getCallNotifToggle();
@@ -1117,6 +1377,11 @@ export const PhoneHubToggle = GObject.registerClass({
                 let mirrorToggle = this.getMirrorToggle(isPaired, isNetwork, deviceId, this.isScrcpyInstalled);
                 this._deviceSection.addMenuItem(mirrorToggle);
 
+
+
+                /* ---------- Apps luncher ---------- */
+                let applucnerhItem = this.getAppsListItem(deviceId, 'deviceName')
+                this._deviceSection.addMenuItem(applucnerhItem);
 
 
                 this._deviceSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -1278,8 +1543,14 @@ export const PhoneHubToggle = GObject.registerClass({
             if (procs.mirror) procs.mirror.force_exit();
             if (procs.notifications) procs.notifications.force_exit();
             if (procs.app) procs.app.force_exit();
+            if (procs.dialler) procs.dialler.force_exit();
         }
         this._activeProcesses.clear();
+
+        if (this._currentCallProc) {
+            this._currentCallProc.force_exit();
+            this._currentCallProc = null;
+        }
 
         const s = Settings.loadSettings();
         if (s.sshfsMountPoint && Mount.isMounted(s.sshfsMountPoint)) {

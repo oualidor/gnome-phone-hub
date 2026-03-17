@@ -1,0 +1,107 @@
+window {
+    background: #f4f4f4;
+    font-family: Sans;
+}
+
+/* number display */
+
+.number-display {
+    font-size: 34px;
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+
+/* keypad buttons */
+
+.dial-key {
+    background: transparent;
+    min-width: 90px;
+    min-height: 70px;
+    border: 0px;
+}
+
+.dial-key:hover {
+    background: #e8e8e8;
+}
+
+.digit {
+    font-size: 28px;
+    font-weight: 600;
+}
+
+.letters {
+    font-size: 11px;
+    color: #777;
+}
+
+/* call button */
+
+.call-button {
+    background: #19a45b;
+    border-radius: 40px;
+    min-width: 70px;
+    min-height: 70px;
+    margin-top: 20px;
+}
+
+.call-button image {
+    color: white;
+}
+
+/* recents */
+
+.section-title {
+    font-weight: 600;
+    color: #666;
+}
+
+.call-card {
+    background: white;
+    border-radius: 20px;
+    padding: 10px;
+}
+
+.recent-row {
+    padding: 10px;
+}
+
+/* bottom nav */
+
+.bottom-nav {
+    background: #f4f4f4;
+    padding: 10px;
+}
+
+.nav-btn {
+    background: transparent;
+}
+
+.nav-label {
+    font-size: 11px;
+    color: #777;
+}
+
+
+.call-card {
+    background: white;
+    border-radius: 15px;
+    padding: 5px;
+    /* Reduced padding since rows have their own */
+    margin-bottom: 15px;
+    border: 1px solid #e0e0e0;
+}
+
+.recent-row {
+    padding: 12px 15px;
+}
+
+/* Make separators subtle */
+separator {
+    background: #f0f0f0;
+    margin: 0 15px;
+}
+
+/* Ensure the recents page can scroll */
+.recents-container {
+    padding: 20px;
+}
