@@ -11,10 +11,12 @@ const session = new Soup.Session();
 
 let host = '127.0.0.1';
 let token = '';
+let restToken = '';
 
 for (let i = 0; i < ARGV.length; i++) {
     if (ARGV[i] === '--host' && ARGV[i + 1]) host = ARGV[i + 1];
     if (ARGV[i] === '--token' && ARGV[i + 1]) token = ARGV[i + 1];
+    if (ARGV[i] === '--restToken' && ARGV[i + 1]) restToken = ARGV[i + 1];
 }
 
 
@@ -125,17 +127,56 @@ app.connect('activate', () => {
 
     });
 
-    /* CALL BUTTON */
+    // Actions Row
 
+
+
+    const actionsRow = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 20,
+        halign: Gtk.Align.CENTER,
+        margin_top: 10
+    });
+
+
+    /* CALL BUTTON */
     const callBtn = new Gtk.Button();
     callBtn.add_css_class("call-button");
     callBtn.connect('clicked', () => makeCall(dialedNumber));
 
     callBtn.set_child(
-        new Gtk.Image({ icon_name: "call-start-symbolic" })
+        new Gtk.Image({ icon_name: "call-start-symbolic", pixel_size: 28 })
     );
 
-    keypadPage.append(callBtn);
+
+    actionsRow.append(callBtn);
+
+
+    /* BACKSPACE BUTTON */
+
+    const backspaceBtn = new Gtk.Button();
+    backspaceBtn.add_css_class("backspace-button");
+
+    backspaceBtn.set_child(
+        new Gtk.Image({
+            icon_name: "edit-clear-symbolic", pixel_size: 28
+        })
+    );
+
+
+    backspaceBtn.connect("clicked", () => {
+        dialedNumber = dialedNumber.slice(0, -1);
+        numberLabel.set_label(dialedNumber);
+    });
+
+    actionsRow.append(backspaceBtn);
+
+    // keypadPage.append(callBtn);
+    keypadPage.append(actionsRow);
+
+
+
+
 
     stack.add_named(keypadPage, "keypad");
 
@@ -157,16 +198,42 @@ app.connect('activate', () => {
     recentsScroll.set_child(recentsContainer);
     stack.add_named(recentsScroll, "recents");
 
-    /* CONTACTS */
-
-    const contactsPage = new Gtk.Label({
-        label: "Contacts",
-        vexpand: true,
-        halign: Gtk.Align.CENTER,
-        valign: Gtk.Align.CENTER
+    /* ---------------- CONTACTS PAGE ---------------- */
+    const contactsPage = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL
     });
 
+    const searchEntry = new Gtk.SearchEntry({
+        placeholder_text: "Search contacts...",
+        hexpand: true
+    });
+    searchEntry.add_css_class("search-entry");
+    contactsPage.append(searchEntry);
+
+    const contactsScroll = new Gtk.ScrolledWindow({
+        vexpand: true,
+        propagate_natural_height: true
+    });
+
+    const contactsContainer = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 0,
+        margin_start: 20,
+        margin_end: 20
+    });
+
+    contactsScroll.set_child(contactsContainer);
+    contactsPage.append(contactsScroll);
+
     stack.add_named(contactsPage, "contacts");
+
+    let allContacts = [];
+    searchEntry.connect("search-changed", () => {
+        const query = searchEntry.get_text().toLowerCase();
+        renderContacts(contactsContainer, allContacts.filter(c =>
+            c.name.toLowerCase().includes(query) || c.number.includes(query)
+        ));
+    });
 
     /* ---------------- NAVBAR ---------------- */
 
@@ -203,23 +270,47 @@ app.connect('activate', () => {
 
         btn.connect("clicked", () => {
             stack.set_visible_child_name(page);
+            btn.add_css_class('active')
             if (page === "recents") {
                 loadCallLog(recentsContainer);
+            } else if (page === "contacts") {
+                fetchContacts(contactsContainer, (contacts) => {
+                    allContacts = contacts;
+                });
             }
         });
 
         nav.append(btn);
+        return btn
 
     }
 
-    navButton("view-grid-symbolic", "Keypad", "keypad");
-    navButton("call-start-symbolic", "Recents", "recents");
-    navButton("avatar-default-symbolic", "Contacts", "contacts");
+    const keyPadButton = navButton("view-grid-symbolic", "Keypad", "keypad");
+    const recentButton = navButton("call-start-symbolic", "Recents", "recents");
+    const contactsButton = navButton("avatar-default-symbolic", "Contacts", "contacts");
 
-    stack.set_visible_child_name("keypad");
+    contactsButton.connect('clicked', () => {
+        contactsButton.add_css_class('active')
+        keyPadButton.remove_css_class('active')
+        recentButton.remove_css_class('active')
+    })
+    keyPadButton.connect('clicked', () => {
+        keyPadButton.add_css_class('active')
+        recentButton.remove_css_class('active')
+        contactsButton.remove_css_class('active')
+    })
+
+    recentButton.connect('clicked', () => {
+        recentButton.add_css_class('active')
+        keyPadButton.remove_css_class('active')
+        contactsButton.remove_css_class('active')
+    })
+
+    recentButton.add_css_class('active')
+    stack.set_visible_child_name("recents");
 
     win.present();
-    // loadCallLog(recentsContainer);
+    loadCallLog(recentsContainer);
 
 });
 
@@ -230,7 +321,92 @@ app.run(null);
 
 
 
+function showLoading(container) {
+    // Clear current list
+    let child = container.get_first_child();
+    while (child) {
+        container.remove(child);
+        child = container.get_first_child();
+    }
+
+    const box = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        halign: Gtk.Align.CENTER,
+        valign: Gtk.Align.CENTER,
+        vexpand: true,
+        spacing: 12,
+        margin_top: 60
+    });
+
+    const spinner = new Gtk.Spinner({
+        spinning: true,
+        width_request: 32,
+        height_request: 32
+    });
+
+    const label = new Gtk.Label({
+        label: "Fetching data...",
+        opacity: 0.7
+    });
+
+    box.append(spinner);
+    box.append(label);
+    container.append(box);
+}
+
+function showError(container, message) {
+    // Clear current list
+    let child = container.get_first_child();
+    while (child) {
+        container.remove(child);
+        child = container.get_first_child();
+    }
+
+    const box = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        halign: Gtk.Align.CENTER,
+        valign: Gtk.Align.CENTER,
+        vexpand: true,
+        spacing: 15,
+        margin_top: 60
+    });
+
+    const icon = new Gtk.Image({
+        icon_name: "dialog-error-symbolic",
+        pixel_size: 48
+    });
+    icon.set_opacity(0.5);
+
+    const label = new Gtk.Label({
+        label: message || "Failed to connect to phone",
+        wrap: true,
+        justify: Gtk.Justification.CENTER,
+        max_width_chars: 30
+    });
+    label.add_css_class("error-text");
+
+    const retryBtn = new Gtk.Button({ label: "Try Again", margin_top: 10 });
+    retryBtn.add_css_class("suggested-action");
+    retryBtn.add_css_class("pill");
+    
+    // Determine which function to call based on the container
+    retryBtn.connect("clicked", () => {
+        if (container.get_name && container.get_name() === "contacts-container") {
+            // This is a bit tricky since we don't have a clean way to know which one was called.
+            // But we can check for specific markers or just pass a type.
+            // For now, let's keep it simple.
+        }
+    });
+
+    box.append(icon);
+    box.append(label);
+    // box.append(retryBtn);
+    container.append(box);
+}
+
+
 function loadCallLog(container) {
+    showLoading(container);
     const url = token ? `ws://${host}:8080/ws?token=${token}` : `ws://${host}:8080/ws`;
     const message = Soup.Message.new('GET', url);
 
@@ -343,8 +519,106 @@ function loadCallLog(container) {
 
         } catch (e) {
             console.error("Call Log Error: " + e);
+            showError(container, "Could not load call history. Is the phone connected?");
         }
     });
+}
+
+
+function fetchContacts(container, callback) {
+    showLoading(container);
+    const url = `http://${host}:8080/contacts?token=${restToken}`;
+    const message = Soup.Message.new('GET', url);
+
+    session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (sess, res) => {
+        try {
+            const bytes = sess.send_and_read_finish(res);
+            const decoder = new TextDecoder();
+            const text = decoder.decode(bytes.toArray());
+            const contacts = JSON.parse(text);
+
+            if (callback) callback(contacts);
+            renderContacts(container, contacts);
+        } catch (e) {
+            console.error("Phone HUB: Failed to fetch contacts: " + e.message);
+            showError(container, "Could not load contacts. Is the phone connected?");
+        }
+    });
+}
+
+function renderContacts(container, contacts) {
+    // Clear current list
+    let child = container.get_first_child();
+    while (child) {
+        container.remove(child);
+        child = container.get_first_child();
+    }
+
+    if (contacts.length === 0) {
+        container.append(new Gtk.Label({
+            label: "No contacts found",
+            margin_top: 20,
+            opacity: 0.5
+        }));
+        return;
+    }
+
+    const card = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL
+    });
+    card.add_css_class("call-card");
+
+    contacts.forEach((contact, i) => {
+        const row = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 15
+        });
+        row.add_css_class('contact-row');
+
+        // Avatar / Icon
+        const initial = contact.name ? contact.name.charAt(0).toUpperCase() : '#';
+        const avatar = new Gtk.Label({ label: initial });
+        avatar.add_css_class("contact-avatar");
+        row.append(avatar);
+
+        const textStack = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            valign: Gtk.Align.CENTER
+        });
+
+        const nameLabel = new Gtk.Label({
+            label: contact.name || "Unknown",
+            halign: Gtk.Align.START
+        });
+        nameLabel.add_css_class("contact-name");
+
+        const numLabel = new Gtk.Label({
+            label: contact.number,
+            halign: Gtk.Align.START
+        });
+        numLabel.add_css_class("contact-number");
+
+        textStack.append(nameLabel);
+        textStack.append(numLabel);
+
+        const callBtn = new Gtk.Button({
+            icon_name: 'call-start-symbolic',
+            valign: Gtk.Align.CENTER
+        });
+        callBtn.add_css_class('nav-btn');
+        callBtn.connect('clicked', () => makeCall(contact.number));
+
+        row.append(textStack);
+        row.append(callBtn);
+        card.append(row);
+
+        if (i < contacts.length - 1) {
+            card.append(new Gtk.Separator({ orientation: Gtk.Orientation.HORIZONTAL }));
+        }
+    });
+
+    container.append(card);
 }
 
 

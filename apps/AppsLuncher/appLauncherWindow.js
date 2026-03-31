@@ -164,20 +164,22 @@ try {
                     return;
                 }
 
-                const width = parseInt(widthEntry.get_text()) || 1080;
-                const height = parseInt(heightEntry.get_text()) || 1920;
+                const width = parseInt(widthEntry.get_text()) || 780;
+                const height = parseInt(heightEntry.get_text()) || 1360;
                 const packageName = selected.package;
 
                 try {
+
                     const scrcpyArgs = [
                         scrcpyPath,
-                        '-s', deviceId,
-                        `--new-display=${width}x${height}`,
+                        // '-s', deviceId,
+                        // `--new-display=${width}x${height}`,
+                        '-m1024',
+                        `--window-title=${packageName}`,
                         `--start-app=${packageName}`,
                         '-Sw',
                         '--no-vd-system-decorations'
                     ];
-                    console.log(`Phone HUB Launcher: Starting scrcpy: ${scrcpyArgs.join(' ')}`);
                     Gio.Subprocess.new(scrcpyArgs, Gio.SubprocessFlags.NONE);
                 } catch (e) {
                     console.error(`Phone HUB Launcher: Failed to start scrcpy: ${e.message}`);

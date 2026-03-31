@@ -20,14 +20,37 @@ export function checkScrcpy() {
     return !!getScrcpyPath();
 }
 
-
+/**
+ * Check if camera is already running for a device
+ * @param {string} deviceId 
+ * @returns {boolean}
+ */
+export function isCameraRunning(deviceId) {
+    try {
+        let [success, stdout, stderr, exitStatus] = GLib.spawn_command_line_sync('pgrep -a scrcpy');
+        if (success && stdout) {
+            let output = new TextDecoder().decode(stdout);
+            let lines = output.split('\n');
+            for (let line of lines) {
+                if (line.includes('--video-source=camera') && line.includes(deviceId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    } catch (e) {
+        console.error(`Error checking camera status: ${e.message}`);
+        return false;
+    }
+}
 
 /**
  * Start camera using scrcpy
  * @param {string} deviceId 
  * @param {Object} procs - Object to store reference to the process
+ * @param {Function} [onExit] - Callback to execute when the process exits
  */
-export function startCamera(deviceId, procs) {
+export function startCamera(deviceId, procs, onExit = null) {
     const scrcpyPath = getScrcpyPath();
     if (!scrcpyPath) {
         Main.notify("Phone HUB", "scrcpy not found. Please install it to use this feature.");
@@ -39,6 +62,7 @@ export function startCamera(deviceId, procs) {
             [
                 scrcpyPath,
                 '-s', deviceId,
+                '--no-window',
                 '--video-source=camera',
                 '--camera-facing=back',
                 '--camera-size=1920x1080',
@@ -54,6 +78,7 @@ export function startCamera(deviceId, procs) {
 
         proc.wait_async(null, () => {
             procs.camera = null;
+            if (onExit) onExit();
         });
     } catch (e) {
         console.error(`Camera Error: ${e.message}`);

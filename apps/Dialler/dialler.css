@@ -48,6 +48,17 @@ window {
     color: white;
 }
 
+
+.backspace-button {
+    background: transparent;
+    border: none;
+    border-radius: 40px;
+    min-width: 70px;
+    min-height: 70px;
+    margin-top: 20px;
+}
+
+
 /* recents */
 
 .section-title {
@@ -73,12 +84,29 @@ window {
 }
 
 .nav-btn {
+
+
+    border: none;
     background: transparent;
 }
 
 .nav-label {
-    font-size: 11px;
+    font-size: 14px;
     color: #777;
+}
+
+.nav-btn.active .nav-label {
+    color: #3584e4;
+    font-weight: bold;
+}
+
+.nav-btn.active image {
+    color: #3584e4;
+}
+
+.nav-btn.active {
+    background: #e8e8e8;
+    border-radius: 10px;
 }
 
 
@@ -99,6 +127,44 @@ window {
 separator {
     background: #f0f0f0;
     margin: 0 15px;
+}
+
+/* contacts */
+.contact-row {
+    padding: 12px 15px;
+}
+
+.contact-avatar {
+    background: #e0e0e0;
+    color: #666;
+    border-radius: 50%;
+    min-width: 40px;
+    min-height: 40px;
+    font-weight: bold;
+}
+
+.contact-name {
+    font-weight: 500;
+}
+
+.contact-number {
+    font-size: 13px;
+    color: #777;
+}
+
+.search-entry {
+    margin: 10px 20px;
+    border-radius: 10px;
+}
+
+.contacts-container {
+    padding: 0px;
+}
+
+.error-text {
+    font-size: 14px;
+    color: #cc0000;
+    margin: 0 40px;
 }
 
 /* Ensure the recents page can scroll */

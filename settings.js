@@ -12,6 +12,7 @@ export function loadSettings() {
             phoneBtMac: null,
             enableCallNotifications: true,
             enablePhoneNotifications: true,
+            enableWebcam: false,
             deviceName: 'Paired Phone',
             sshfsPort: '2222',
             sshfsPath: '/sdcard',
@@ -30,6 +31,9 @@ export function loadSettings() {
             }
             if (data.enablePhoneNotifications === undefined) {
                 data.enablePhoneNotifications = true;
+            }
+            if (data.enableWebcam === undefined) {
+                data.enableWebcam = false;
             }
             if (!data.deviceName) {
                 data.deviceName = 'Paired Phone';

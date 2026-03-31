@@ -15,6 +15,7 @@ import * as Mount from './mount.js';
 import * as ScreenStream from './screenStream.js';
 import { PairingDialog } from './pairingDialog.js';
 import { WebSocketManager } from './webSocketManager.js';
+import { SyncedToggle, SyncedAction } from './syncedToggle.js';
 
 
 
@@ -191,6 +192,7 @@ export const PhoneHubToggle = GObject.registerClass({
                     }
                 }
             } else if (data.type === "UNPAIR") {
+                Main.notify("Phone HUB", "Device unpaired from phone.");
                 console.log("Phone HUB: Received UNPAIR message from phone.");
                 this._forgetDevice();
             }
@@ -779,214 +781,232 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
     getMountToogle(isPaired, isNetwork, deviceId) {
-        /* ---------- SSHFS Mount ---------- */
         const sshfsSettings = Settings.loadSettings();
         const mountPoint = sshfsSettings.sshfsMountPoint;
-        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint));
-        let mountToggle = this._mountToggle;
-        mountToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'folder-remote-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
+        let isCurrentlyMounted = Mount.isMounted(mountPoint);
 
-        if (!isPaired || !Mount.checkSshfs()) {
-            mountToggle.sensitive = false;
-            if (!isPaired) mountToggle.label.text += ' (Not Paired)';
-            else mountToggle.label.text += ' (sshfs missing)';
+        if (!this._mountSyncedToggle) {
+            this._mountSyncedToggle = new SyncedToggle('Mount Files', 'folder-remote-symbolic', isCurrentlyMounted, async (state) => {
+                if (state) {
+                    try {
+                        const s = Settings.loadSettings();
+                        let ip = s.phoneIp || (isNetwork ? deviceId : null);
+                        if (!ip && !isNetwork) {
+                            const ips = await Adb.getDeviceIps(deviceId);
+                            ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                        }
+                        if (!ip) throw new Error("Could not find device IP");
+
+                        await Mount.mountDevice(ip, s);
+                        Main.notify("Phone HUB", "Phone files mounted at " + mountPoint);
+                    } catch (e) {
+                        Main.notify("Phone HUB", "Failed to mount: " + e.message);
+                        this._mountSyncedToggle.setState(false, false);
+                    }
+                } else {
+                    try {
+                        await Mount.unmountDevice(mountPoint);
+                        Main.notify("Phone HUB", "Phone files unmounted");
+                    } catch (e) {
+                        Main.notify("Phone HUB", "Failed to unmount: " + e.message);
+                        this._mountSyncedToggle.setState(true, false);
+                    }
+                }
+            });
+        } else {
+            this._mountSyncedToggle.setState(isCurrentlyMounted, false);
         }
 
-        mountToggle.connect('toggled', async (item, state) => {
-            if (state) {
-                try {
-                    const s = Settings.loadSettings();
-                    let ip = s.phoneIp || (isNetwork ? deviceId : null);
-                    if (!ip && !isNetwork) {
-                        const ips = await Adb.getDeviceIps(deviceId);
-                        ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-                    }
-                    if (!ip) throw new Error("Could not find device IP");
+        let sensitive = true;
+        let suffix = '';
+        if (!isPaired || !Mount.checkSshfs()) {
+            sensitive = false;
+            if (!isPaired) suffix = 'Not Paired';
+            else suffix = 'sshfs missing';
+        }
+        this._mountSyncedToggle.setSensitive(sensitive, suffix);
 
-                    await Mount.mountDevice(ip, s);
-                    Main.notify("Phone HUB", "Phone files mounted at " + mountPoint);
-                    if (this._topBarRef) this._topBarRef.syncMountState(true);
-                } catch (e) {
-                    Main.notify("Phone HUB", "Failed to mount: " + e.message);
-                    mountToggle.setToggleState(false);
-                }
-            } else {
-                try {
-                    await Mount.unmountDevice(mountPoint);
-                    Main.notify("Phone HUB", "Phone files unmounted");
-                    if (this._topBarRef) this._topBarRef.syncMountState(false);
-                } catch (e) {
-                    Main.notify("Phone HUB", "Failed to unmount: " + e.message);
-                    mountToggle.setToggleState(true);
-                }
-            }
-        });
-
-        return mountToggle;
+        return this._mountSyncedToggle.createMenuItem();
     }
 
 
     getCameraToggle(isPaired, isNetwork, deviceId, hasScrcpy) {
-        let cameraToggle = new PopupMenu.PopupSwitchMenuItem('Use as webcam', false);
-        cameraToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'camera-video-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
+        let procs = this._getDeviceProcesses(deviceId);
+        let isProcRunning = procs && procs.camera != null;
+        let isSystemRunning = Scrcpy.isCameraRunning(deviceId);
+        let isActive = isProcRunning || isSystemRunning;
 
-        if (!hasScrcpy || isNetwork || !isPaired) {
-            cameraToggle.sensitive = false;
-            if (!isPaired) cameraToggle.label.text += ' (Not Paired)';
-            else if (!hasScrcpy) cameraToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) cameraToggle.label.text += ' (USB only)';
+        let settings = Settings.loadSettings();
+
+        if (!this._cameraSyncedToggle) {
+            this._cameraSyncedToggle = new SyncedToggle('Use as webcam', 'camera-video-symbolic', isActive, (state) => {
+                let currentSettings = Settings.loadSettings();
+                currentSettings.enableWebcam = state;
+                Settings.saveSettings(currentSettings);
+
+                if (state) {
+                    Scrcpy.startCamera(deviceId, this._getDeviceProcesses(deviceId), () => {
+                        this._cameraSyncedToggle.setState(false, false);
+                        let s = Settings.loadSettings();
+                        s.enableWebcam = false;
+                        Settings.saveSettings(s);
+                    });
+                } else {
+                    this._stopCamera(deviceId);
+                }
+            });
+        } else {
+            this._cameraSyncedToggle.setState(isActive, false);
         }
 
-        cameraToggle.connect('toggled', (item, state) => {
-            if (state) {
-                Scrcpy.startCamera(deviceId, this._getDeviceProcesses(deviceId));
-            } else {
-                this._stopCamera(deviceId);
-            }
-        });
+        // Auto-start webcam if the user previously had it enabled but it's not currently running
+        if (settings.enableWebcam && !isActive && hasScrcpy && !isNetwork && isPaired && !this._cameraAutoStarted) {
+            this._cameraAutoStarted = true;
+            this._cameraSyncedToggle.setState(true, true);
+        }
 
-        return cameraToggle;
+        let sensitive = true;
+        let suffix = '';
+        if (!hasScrcpy || isNetwork || !isPaired) {
+            sensitive = false;
+            if (!isPaired) suffix = 'Not Paired';
+            else if (!hasScrcpy) suffix = 'scrcpy missing';
+            else if (isNetwork) suffix = 'USB only';
+        }
+
+        this._cameraSyncedToggle.setSensitive(sensitive, suffix);
+        return this._cameraSyncedToggle.createMenuItem();
     }
 
     getMirrorToggle(isPaired, isNetwork, deviceId, hasScrcpy) {
-        let mirrorToggle = new PopupMenu.PopupSwitchMenuItem('Mirror Display', false);
-        mirrorToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'video-display-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
+        let procs = this._getDeviceProcesses(deviceId);
+        let isActive = procs && procs.mirror != null;
 
-        if (!hasScrcpy || isNetwork || !isPaired) {
-            mirrorToggle.sensitive = false;
-            if (!isPaired) mirrorToggle.label.text += ' (Not Paired)';
-            else if (!hasScrcpy) mirrorToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) mirrorToggle.label.text += ' (USB only)';
+        if (!this._mirrorSyncedToggle) {
+            this._mirrorSyncedToggle = new SyncedToggle('Mirror Display', 'video-display-symbolic', isActive, (state) => {
+                if (state) {
+                    Scrcpy.startMirroring(deviceId, this._getDeviceProcesses(deviceId));
+                } else {
+                    this._stopMirror(deviceId);
+                }
+            });
+        } else {
+            this._mirrorSyncedToggle.setState(isActive, false);
         }
 
-        mirrorToggle.connect('toggled', (item, state) => {
-            if (state) {
-                Scrcpy.startMirroring(deviceId, this._getDeviceProcesses(deviceId));
-            } else {
-                this._stopMirror(deviceId);
-            }
-        });
+        let sensitive = true;
+        let suffix = '';
+        if (!hasScrcpy || isNetwork || !isPaired) {
+            sensitive = false;
+            if (!isPaired) suffix = 'Not Paired';
+            else if (!hasScrcpy) suffix = 'scrcpy missing';
+            else if (isNetwork) suffix = 'adb only';
+        }
 
-        return mirrorToggle;
+        this._mirrorSyncedToggle.setSensitive(sensitive, suffix);
+        return this._mirrorSyncedToggle.createMenuItem();
     }
 
     getCallNotifToggle() {
         const callNotifSettings = Settings.loadSettings();
+        let isEnabled = callNotifSettings.enableCallNotifications !== false;
 
-        let callNotifToggle = new PopupMenu.PopupSwitchMenuItem(
-            'Call Notifications',
-            callNotifSettings.enableCallNotifications !== false
-        );
-        callNotifToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'call-incoming-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        callNotifToggle.connect('toggled', (_item, state) => {
-            const s = Settings.loadSettings();
-            s.enableCallNotifications = state;
-            Settings.saveSettings(s);
-        });
-        return callNotifToggle;
+        if (!this._callNotifSyncedToggle) {
+            this._callNotifSyncedToggle = new SyncedToggle('Call Notifications', 'call-incoming-symbolic', isEnabled, (state) => {
+                const s = Settings.loadSettings();
+                s.enableCallNotifications = state;
+                Settings.saveSettings(s);
+                if (state) this._startCallPolling();
+                else this._stopCallPolling();
+            });
+        } else {
+            this._callNotifSyncedToggle.setState(isEnabled, false);
+        }
+
+        return this._callNotifSyncedToggle.createMenuItem();
     }
 
     getPhoneNotificationsToggle() {
-        const callNotifSettings = Settings.loadSettings();
+        const notifSettings = Settings.loadSettings();
+        let isEnabled = notifSettings.enablePhoneNotifications !== false;
 
-        let phoneNotifToggle = new PopupMenu.PopupSwitchMenuItem(
-            'Sync Notifications',
-            callNotifSettings.enablePhoneNotifications !== false
-        );
-        phoneNotifToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'mail-unread-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        phoneNotifToggle.connect('toggled', (_item, state) => {
-            const s = Settings.loadSettings();
-            s.enablePhoneNotifications = state;
-            Settings.saveSettings(s);
-            if (!state) {
-                this._notifiedIds.clear();
-            }
-        });
-        return phoneNotifToggle;
+        if (!this._phoneNotifSyncedToggle) {
+            this._phoneNotifSyncedToggle = new SyncedToggle('Sync Notifications', 'mail-unread-symbolic', isEnabled, (state) => {
+                const s = Settings.loadSettings();
+                s.enablePhoneNotifications = state;
+                Settings.saveSettings(s);
+                if (state) this._startNotificationPolling();
+                else {
+                    this._stopNotificationPolling();
+                    this._notifiedIds.clear();
+                }
+            });
+        } else {
+            this._phoneNotifSyncedToggle.setState(isEnabled, false);
+        }
+
+        return this._phoneNotifSyncedToggle.createMenuItem();
     }
 
     getFindMyPhoneItem(isPaired, deviceId, isNetwork) {
         this._isRinging = this._isRinging || false;
-        let findPhoneItem = new PopupMenu.PopupMenuItem(this._isRinging ? 'Stop Ringing Phone' : 'Find My Phone');
-        const icon = new St.Icon({
-            icon_name: this._isRinging ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
-            style_class: 'popup-menu-icon',
-        });
-        findPhoneItem.insert_child_at_index(icon, 0);
 
-        if (!isPaired) {
-            findPhoneItem.sensitive = false;
+        if (!this._findPhoneSyncedAction) {
+            this._findPhoneSyncedAction = new SyncedAction('Find My Phone', 'audio-volume-high-symbolic', async () => {
+                let ip = isNetwork ? deviceId : null;
+                if (!isNetwork) {
+                    const s = Settings.loadSettings();
+                    ip = s.phoneIp;
+                    if (!ip) {
+                        const ips = await Adb.getDeviceIps(deviceId);
+                        ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
+                    }
+                }
+
+                if (!ip) return;
+
+                const s = Settings.loadSettings();
+                const token = s.restToken;
+                const action = this._isRinging ? 'stop' : 'start';
+
+                try {
+                    const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
+                    SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+                        try {
+                            const bytes = session.send_and_read_finish(res);
+                            let decoder = new TextDecoder();
+                            let text = decoder.decode(bytes.get_data ? bytes.get_data() : bytes.toArray());
+                            let data = JSON.parse(text);
+
+                            if (data.status === "ringing") {
+                                this.setRingingState(true);
+                            } else if (data.status === "stopped") {
+                                this.setRingingState(false);
+                            }
+                        } catch (e) {
+                            console.error(`Find My Phone Error: ${e.message}`);
+                        }
+                    });
+                } catch (e) {
+                    console.error(`Find My Phone Error: ${e.message}`);
+                }
+            });
         }
 
-        findPhoneItem.connect('activate', async () => {
-            let ip = isNetwork ? deviceId : null;
-            if (!isNetwork) {
-                const s = Settings.loadSettings();
-                ip = s.phoneIp;
-                if (!ip) {
-                    const ips = await Adb.getDeviceIps(deviceId);
-                    ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-                }
-            }
-
-            if (!ip) return;
-
-            const s = Settings.loadSettings();
-            const token = s.restToken;
-            const action = this._isRinging ? 'stop' : 'start';
-
-            try {
-                const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
-                SoupSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
-                    try {
-                        const bytes = session.send_and_read_finish(res);
-                        let decoder = new TextDecoder();
-                        let text = decoder.decode(bytes.get_data ? bytes.get_data() : bytes.toArray());
-                        let data = JSON.parse(text);
-
-                        if (data.status === "ringing") {
-                            this.setRingingState(true);
-                            if (this._topBarRef && this._topBarRef.setRingingState) {
-                                this._topBarRef.setRingingState(true);
-                            }
-                        } else if (data.status === "stopped") {
-                            this.setRingingState(false);
-                        }
-                    } catch (e) {
-                        console.error(`Find My Phone Error: ${e.message}`);
-                    }
-                });
-            } catch (e) {
-                console.error(`Find My Phone Error: ${e.message}`);
-            }
-        });
+        this._findPhoneSyncedAction.setSensitive(isPaired);
 
         this._updateFindPhoneUI = () => {
             if (this._isRinging) {
-                findPhoneItem.label.text = 'Stop Ringing Phone';
-                icon.icon_name = 'audio-volume-muted-symbolic';
+                this._findPhoneSyncedAction.setLabelAndIcon('Stop Ringing Phone', 'audio-volume-muted-symbolic');
             } else {
-                findPhoneItem.label.text = 'Find My Phone';
-                icon.icon_name = 'audio-volume-high-symbolic';
+                this._findPhoneSyncedAction.setLabelAndIcon('Find My Phone', 'audio-volume-high-symbolic');
             }
         };
 
-        return findPhoneItem;
+        // Initialize UI with current state
+        this._updateFindPhoneUI();
+
+        return this._findPhoneSyncedAction.createMenuItem();
     }
 
     getWifiAdbItem(deviceId, ip) {
@@ -1159,7 +1179,8 @@ export const PhoneHubToggle = GObject.registerClass({
                     '-m',
                     scriptPath,
                     '--host', s.phoneIp,
-                    '--token', s.wsToken
+                    '--token', s.wsToken,
+                    '--restToken', s.restToken
                 ];
 
 
@@ -1192,7 +1213,7 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
 
-    getAppsListItem(deviceId, deviceName) {
+    getAppsListItem(deviceId, deviceName, isNetwork) {
         // /* ---------- Launch App on PC ---------- */
         let launchAppItem = new PopupMenu.PopupMenuItem('Applications manager (Beta)');
         launchAppItem.insert_child_at_index(new St.Icon({
@@ -1200,10 +1221,10 @@ export const PhoneHubToggle = GObject.registerClass({
             style_class: 'popup-menu-icon',
         }), 0);
 
-        // if (!isPaired) {
-        //     launchAppItem.sensitive = false;
-        //     launchAppItem.label.text += ' (Not Paired)';
-        // }
+        if (isNetwork) {
+            launchAppItem.sensitive = false;
+            launchAppItem.label.text += ' (Adb only)';
+        }
 
         launchAppItem.connect('activate', async () => {
             if (!this._isConnected || !this._wsManager.isConnected) {
@@ -1253,7 +1274,7 @@ export const PhoneHubToggle = GObject.registerClass({
                             if (line !== null) {
                                 console.error(`Phone HUB (Launcher Error): ${line}`);
                                 if (line.includes('Error') || line.includes('Failed')) {
-                                    Main.notify('Phone HUB Error', line.substring(0, 100));
+                                    Main.notify('Phone HUB Error', line);
                                 }
                                 readError();
                             }
@@ -1380,7 +1401,7 @@ export const PhoneHubToggle = GObject.registerClass({
 
 
                 /* ---------- Apps luncher ---------- */
-                let applucnerhItem = this.getAppsListItem(deviceId, 'deviceName')
+                let applucnerhItem = this.getAppsListItem(deviceId, 'deviceName', isNetwork)
                 this._deviceSection.addMenuItem(applucnerhItem);
 
 
@@ -1426,7 +1447,8 @@ export const PhoneHubToggle = GObject.registerClass({
         }
 
         Settings.saveSettings({ phoneIp: "", deviceName: "" });
-        this._disconnectWebSocket();
+        this._wsManager.closeConnection();
+        // this._disconnectWebSocket();
         if (this._topBarRef) this._topBarRef.updateVisibility(false);
         this.refreshDevices(true);
         Main.notify("Phone HUB", "Device removed.");

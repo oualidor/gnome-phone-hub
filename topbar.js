@@ -100,260 +100,66 @@ export const PhoneHubTopBarMenu = GObject.registerClass({
 
 
 
-    getFindMyPhoneItem(isPaired, deviceId, isNetwork) {
-        this._isRinging = this._isRinging || false;
-        let findPhoneItem = new PopupMenu.PopupMenuItem(this._isRinging ? 'Stop Ringing Phone' : 'Find My Phone');
-        const icon = new St.Icon({
-            icon_name: this._isRinging ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
-            style_class: 'popup-menu-icon',
-        });
-        findPhoneItem.insert_child_at_index(icon, 0);
-
-        if (!isPaired) {
-            findPhoneItem.sensitive = false;
-        }
-
-        findPhoneItem.connect('activate', async () => {
-            const s = Settings.loadSettings();
-            let ip = s.phoneIp;
-            if (!ip) {
-                ip = isNetwork ? deviceId : null;
-                if (!isNetwork) {
-                    const ips = await Adb.getDeviceIps(deviceId);
-                    ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-                }
-            }
-
-            if (!ip) return;
-
-            const token = s.restToken;
-            const action = this._isRinging ? 'stop' : 'start';
-
-            try {
-                const message = Soup.Message.new('POST', `http://${ip}:8080/ring?token=${token}&action=${action}`);
-                const session = new Soup.Session();
-                session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
-                    try {
-                        const bytes = session.send_and_read_finish(res);
-                        let decoder = new TextDecoder();
-                        let text = decoder.decode(bytes.get_data ? bytes.get_data() : bytes.toArray());
-                        let data = JSON.parse(text);
-
-                        if (data.status === "ringing") {
-                            this.setRingingState(true);
-                            if (this._toggleRef && this._toggleRef.setRingingState) {
-                                this._toggleRef.setRingingState(true);
-                            }
-                        } else if (data.status === "stopped") {
-                            this.setRingingState(false);
-                            if (this._toggleRef && this._toggleRef.setRingingState) {
-                                this._toggleRef.setRingingState(false);
-                            }
-                        }
-                    } catch (e) {
-                        console.error(`Find My Phone Error: ${e.message}`);
-                    }
-                });
-            } catch (e) {
-                console.error(`Find My Phone Error: ${e.message}`);
-            }
-        });
-
-        this._updateFindPhoneUI = () => {
-            if (this._isRinging) {
-                findPhoneItem.label.text = 'Stop Ringing Phone';
-                icon.icon_name = 'audio-volume-muted-symbolic';
-            } else {
-                findPhoneItem.label.text = 'Find My Phone';
-                icon.icon_name = 'audio-volume-high-symbolic';
-            }
-        };
-
-        return findPhoneItem;
-    }
-
-    setRingingState(state) {
-        this._isRinging = state;
-        if (this._updateFindPhoneUI) {
-            this._updateFindPhoneUI();
-        }
-    }
-
-    resetFindPhone() {
-        this.setRingingState(false);
-    }
 
     async rebuildMenu(deviceId, deviceName, isPaired, isNetwork) {
-        this.menu.removeAll();
-        if (!isPaired) {
-            let item = new PopupMenu.PopupMenuItem('Device Unpaired');
-            item.sensitive = false;
-            this.menu.addMenuItem(item);
-            this._deviceLabel.set_text('');
-            return;
-        }
-
-        // Update the top bar label with the device name
-        this._deviceLabel.set_text(deviceName);
-
-        const hasScrcpy = Scrcpy.checkScrcpy();
-        const settings = Settings.loadSettings();
-
-
-
-        /* ---------- SSHFS Mount ---------- */
-        const mountPoint = settings.sshfsMountPoint;
-        this._mountToggle = new PopupMenu.PopupSwitchMenuItem('Mount Files', Mount.isMounted(mountPoint),);
-        let mountToggle = this._mountToggle;
-        mountToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'folder-remote-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        if (!Mount.checkSshfs()) {
-            mountToggle.sensitive = false;
-            mountToggle.label.text += ' (sshfs missing)';
-        }
-        mountToggle.connect('toggled', async (item, state) => {
-            if (state) {
-                try {
-                    const s = Settings.loadSettings();
-                    let ip = s.phoneIp;
-
-                    if (!ip) {
-                        ip = isNetwork ? deviceId : null;
-                        if (!isNetwork) {
-                            const ips = await Adb.getDeviceIps(deviceId);
-                            ip = ips.find(i => i.startsWith('192.168.') || i.startsWith('10.') || i.startsWith('172.')) || ips[0];
-                        }
-                    }
-                    if (!ip) throw new Error("Could not find device IP");
-
-                    await Mount.mountDevice(ip, s);
-                    Main.notify("Phone HUB", "Phone files mounted at " + mountPoint);
-                    if (this._toggleRef) this._toggleRef.syncMountState(true);
-                } catch (e) {
-                    Main.notify("Phone HUB", "Failed to mount: " + e.message);
-                    mountToggle.setToggleState(false);
-                }
-            } else {
-                try {
-                    await Mount.unmountDevice(mountPoint);
-                    Main.notify("Phone HUB", "Phone files unmounted");
-                    if (this._toggleRef) this._toggleRef.syncMountState(false);
-                } catch (e) {
-                    Main.notify("Phone HUB", "Failed to unmount: " + e.message);
-                    mountToggle.setToggleState(true);
-                }
+        try {
+            this.menu.removeAll();
+            if (!isPaired) {
+                let item = new PopupMenu.PopupMenuItem('Device Unpaired');
+                item.sensitive = false;
+                this.menu.addMenuItem(item);
+                this._deviceLabel.set_text('');
+                return;
             }
-        });
-        this.menu.addMenuItem(mountToggle);
 
-        /* ---------- Call Notifications ---------- */
-        let callNotifToggle = new PopupMenu.PopupSwitchMenuItem(
-            'Call Notifications',
-            settings.enableCallNotifications !== false
-        );
-        callNotifToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'call-incoming-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        callNotifToggle.connect('toggled', (_item, state) => {
-            const s = Settings.loadSettings();
-            s.enableCallNotifications = state;
-            Settings.saveSettings(s);
+            // Update the top bar label with the device name
+            this._deviceLabel.set_text(deviceName);
+
+            const hasScrcpy = Scrcpy.checkScrcpy();
+            const settings = Settings.loadSettings();
+
+
+
+            /* ---------- Toggles from Main Extension Logic ---------- */
             if (this._toggleRef) {
-                if (state) this._toggleRef._startCallPolling();
-                else this._toggleRef._stopCallPolling();
+                let mountToggle = this._toggleRef.getMountToogle(isPaired, isNetwork, deviceId);
+                this.menu.addMenuItem(mountToggle);
+
+                let callNotifToggle = this._toggleRef.getCallNotifToggle();
+                this.menu.addMenuItem(callNotifToggle);
+
+                let phoneNotifToggle = this._toggleRef.getPhoneNotificationsToggle();
+                this.menu.addMenuItem(phoneNotifToggle);
+
+                let findPhoneItem = this._toggleRef.getFindMyPhoneItem(isPaired, deviceId, isNetwork);
+                this.menu.addMenuItem(findPhoneItem);
+
+                this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+                let cameraToggle = this._toggleRef.getCameraToggle(isPaired, isNetwork, deviceId, hasScrcpy);
+                this.menu.addMenuItem(cameraToggle);
+
+                let mirrorToggle = this._toggleRef.getMirrorToggle(isPaired, isNetwork, deviceId, hasScrcpy);
+                this.menu.addMenuItem(mirrorToggle);
             }
-        });
-        this.menu.addMenuItem(callNotifToggle);
 
-        /* ---------- Sync Notifications ---------- */
-        let phoneNotifToggle = new PopupMenu.PopupSwitchMenuItem(
-            'Sync Notifications',
-            settings.enablePhoneNotifications !== false
-        );
-        phoneNotifToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'mail-unread-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        phoneNotifToggle.connect('toggled', (_item, state) => {
-            const s = Settings.loadSettings();
-            s.enablePhoneNotifications = state;
-            Settings.saveSettings(s);
-            if (this._toggleRef) {
-                if (state) this._toggleRef._startNotificationPolling();
-                else {
-                    this._toggleRef._stopNotificationPolling();
-                    this._toggleRef._notifiedIds.clear();
-                }
-            }
-        });
-        this.menu.addMenuItem(phoneNotifToggle);
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        /* ---------- Find My Phone ---------- */
-        let findPhoneItem = this.getFindMyPhoneItem(isPaired, deviceId, isNetwork);
-        this.menu.addMenuItem(findPhoneItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        /* ---------- Camera Toggle ---------- */
-        let cameraToggle = new PopupMenu.PopupSwitchMenuItem('Use as webcam', false);
-        cameraToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'camera-video-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        if (!hasScrcpy || isNetwork) {
-            cameraToggle.sensitive = false;
-            if (!hasScrcpy) cameraToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) cameraToggle.label.text += ' (USB only)';
+            /* ---------- Unpair Action ---------- */
+            let unpairItem = new PopupMenu.PopupMenuItem('Unpair Device');
+            unpairItem.insert_child_at_index(new St.Icon({
+                icon_name: 'user-trash-symbolic',
+                style_class: 'popup-menu-icon',
+            }), 0);
+            unpairItem.style = 'color: #ed333b;';
+            unpairItem.connect('activate', () => {
+                if (this._toggleRef) this._toggleRef._forgetDevice();
+            });
+            this.menu.addMenuItem(unpairItem);
+        } catch (e) {
+            console.error(e)
         }
-        cameraToggle.connect('toggled', (item, state) => {
-            if (this._toggleRef) {
-                if (state) Scrcpy.startCamera(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
-                else this._toggleRef._stopCamera(deviceId);
-            }
-        });
-        this.menu.addMenuItem(cameraToggle);
 
-        /* ---------- Mirror Toggle ---------- */
-        let mirrorToggle = new PopupMenu.PopupSwitchMenuItem('Mirror Display', false);
-        mirrorToggle.insert_child_at_index(new St.Icon({
-            icon_name: 'video-display-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        if (!hasScrcpy || isNetwork) {
-            mirrorToggle.sensitive = false;
-            if (!hasScrcpy) mirrorToggle.label.text += ' (scrcpy missing)';
-            else if (isNetwork) mirrorToggle.label.text += ' (USB only)';
-        }
-        mirrorToggle.connect('toggled', (item, state) => {
-            if (this._toggleRef) {
-                if (state) Scrcpy.startMirroring(deviceId, this._toggleRef._getDeviceProcesses(deviceId));
-                else this._toggleRef._stopMirror(deviceId);
-            }
-        });
-        this.menu.addMenuItem(mirrorToggle);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        /* ---------- Unpair Action ---------- */
-        let unpairItem = new PopupMenu.PopupMenuItem('Unpair Device');
-        unpairItem.insert_child_at_index(new St.Icon({
-            icon_name: 'user-trash-symbolic',
-            style_class: 'popup-menu-icon',
-        }), 0);
-        unpairItem.style = 'color: #ed333b;';
-        unpairItem.connect('activate', () => {
-            if (this._toggleRef) this._toggleRef._forgetDevice();
-        });
-        this.menu.addMenuItem(unpairItem);
-    }
-
-    syncMountState(state) {
-        if (this._mountToggle && this._mountToggle.state !== state) {
-            this._mountToggle.setToggleState(state);
-        }
     }
 
     updateBattery(level, iconName) {
